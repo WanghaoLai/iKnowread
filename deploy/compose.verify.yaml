@@ -1,0 +1,22 @@
+# Local release verification only. The unique Compose project name used by the
+# verification commands keeps its named volumes separate from production.
+services:
+  db:
+    ports: !override
+      - "127.0.0.1:13306:3306"
+
+  backend:
+    environment:
+      DEFAULT_ADMIN_PASSWORD: ${VERIFY_ADMIN_PASSWORD:?Set a disposable verification password}
+    volumes: !override
+      - verify_app_data:/app/data
+    ports: !override
+      - "127.0.0.1:19090:9090"
+
+  web:
+    ports: !override
+      - "127.0.0.1:18080:80"
+      - "127.0.0.1:18443:443"
+
+volumes:
+  verify_app_data:

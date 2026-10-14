@@ -1,0 +1,75 @@
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
+
+from app.common.result import Result
+from app.config import settings
+from app.dependencies import CurrentAccount, get_current_account
+from app.schemas.account import AccountPublic, LoginRequest, PasswordUpdateRequest, RegisterRequest
+from app.security import issue_session_token, SESSION_COOKIE, SESSION_MAX_AGE
+from app.services import auth_service
+from app.services.auth_guard import limit_auth
+
+router = APIRouter()
+
+
+@router.get("/me")
+async def me(current: CurrentAccount = Depends(get_current_account)):
+    return Result.success(AccountPublic.model_validate(current.account))
+
+
+# 登录
+@router.post("/login")
+async def login(account: LoginRequest, response: Response, request: Request):
+    await limit_auth(request, "login", account.username)
+    logged_in = await auth_service.login(account.role, account.username, account.password)
+    token = issue_session_token(
+        logged_in.id,
+        logged_in.role,
+        logged_in.password,
+        logged_in.session_version,
+    )
+    response.set_cookie(
+        key=SESSION_COOKIE,
+        value=token,
+        max_age=SESSION_MAX_AGE,
+        httponly=True,
+        secure=not settings.DEBUG,
+        samesite="strict",
+        path="/",
+    )
+    return Result.success(AccountPublic.model_validate(logged_in))
+
+
+@router.post("/logout")
+async def logout(
+    response: Response,
+    current: CurrentAccount = Depends(get_current_account),
+):
+    await auth_service.revoke_sessions(
+        current.id, current.account.session_version
+    )
+    response.delete_cookie(SESSION_COOKIE, path="/")
+    return Result.success()
+
+
+# 注册
+@router.post("/register")
+async def register(account: RegisterRequest, request: Request):
+    if not settings.ALLOW_REGISTRATION:
+        raise HTTPException(status_code=403, detail="当前系统未开放自助注册，请联系管理员创建账号")
+    await limit_auth(request, "register", account.username)
+    await auth_service.register(account.username, account.password, account.name)
+    return Result.success()
+
+
+# 修改密码
+@router.put("/updatePassword")
+async def update_password(
+    account: PasswordUpdateRequest,
+    response: Response,
+    current: CurrentAccount = Depends(get_current_account),
+):
+    await auth_service.update_password(
+        current.id, account.password, account.newPassword
+    )
+    response.delete_cookie(SESSION_COOKIE, path="/")
+    return Result.success()

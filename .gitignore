@@ -1,0 +1,18 @@
+.idea/
+.DS_Store
+**/.DS_Store
+**/__pycache__/
+*.py[cod]
+
+fastapi-app/.env
+fastapi-app/data/files/
+fastapi-app/data/.ai-config-key
+
+vue/node_modules/
+vue/dist/
+
+# Docker deployment secrets and persisted data
+/.env
+/runtime/
+/backups/
+fastapi-app/data/.initial-admin-password

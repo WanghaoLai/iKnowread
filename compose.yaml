@@ -1,0 +1,154 @@
+name: iknowread
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  db:
+    image: iknowread-mysql:${APP_TAG:-local}
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: iknowread
+      MYSQL_USER: iknowread
+      MYSQL_PASSWORD: ${DB_PASSWORD:?Run deploy/init-env.py first}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Run deploy/init-env.py first}
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --innodb-buffer-pool-size=128M
+      - --max-connections=30
+      - --performance-schema=OFF
+      - --innodb-redo-log-capacity=64M
+      - --skip-log-bin
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", 'MYSQL_PWD="$$MYSQL_PASSWORD" mysql --protocol=TCP -h 127.0.0.1 -u "$$MYSQL_USER" "$$MYSQL_DATABASE" -e "SELECT 1" >/dev/null 2>&1']
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+    mem_limit: 600m
+    memswap_limit: 900m
+    logging: *logging
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - data
+
+  backend:
+    image: iknowread-backend:${APP_TAG:-local}
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.backend
+    restart: unless-stopped
+    init: true
+    environment:
+      DEBUG: "false"
+      AUTH_SECRET: ${AUTH_SECRET:?Run deploy/init-env.py first}
+      DEFAULT_ADMIN_USERNAME: admin
+      DEFAULT_ADMIN_PASSWORD: ""
+      ALLOW_REGISTRATION: ${ALLOW_REGISTRATION:-false}
+      LOGIN_RATE_LIMIT: "10"
+      REGISTER_RATE_LIMIT: "3"
+      PASSWORD_WORKERS: "2"
+      PASSWORD_QUEUE_WAIT_SECONDS: "1"
+      DB_HOST: db
+      DB_PORT: "3306"
+      DB_USER: iknowread
+      DB_PASSWORD: ${DB_PASSWORD:?Run deploy/init-env.py first}
+      DB_DATABASE: iknowread
+      DB_AUTO_CREATE: "false"
+      DB_ECHO: "false"
+      CORS_ORIGINS: https://${DOMAIN:?Set DOMAIN in .env}
+      UPLOAD_DIR: /app/data/files
+      USER_STORAGE_QUOTA_BYTES: ${USER_STORAGE_QUOTA_BYTES:-2147483648}
+      USER_DOCUMENT_LIMIT: ${USER_DOCUMENT_LIMIT:-200}
+      STORAGE_MIN_FREE_BYTES: ${STORAGE_MIN_FREE_BYTES:-2147483648}
+      UPLOAD_CONCURRENCY: "3"
+      UPLOAD_QUEUE_WAIT_SECONDS: "1"
+      OCR_ENABLED: ${OCR_ENABLED:-false}
+      OCR_WORKERS: "1"
+      OCR_JOBS_PER_DOCUMENT: "1"
+      OCR_MAX_IMAGE_MPIXELS: "20"
+      OCR_TIMEOUT_SECONDS: "900"
+      OCR_PAGE_TIMEOUT_SECONDS: "120"
+      AI_GLOBAL_CONCURRENCY: "3"
+      AI_ACCOUNT_CONCURRENCY: "1"
+      AI_QUEUE_WAIT_SECONDS: "1"
+      AI_MAX_RESPONSE_BYTES: "2097152"
+    volumes:
+      - ./runtime/app-data:/app/data
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9090/ready', timeout=4)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 90s
+    mem_limit: 850m
+    memswap_limit: 1500m
+    cpus: 1.25
+    stop_grace_period: 45s
+    logging: *logging
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - proxy
+      - data
+
+  web:
+    image: iknowread-web:${APP_TAG:-local}
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.web
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN:?Set DOMAIN in .env}
+      ACME_EMAIL: ${ACME_EMAIL:?Set ACME_EMAIL in .env}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      backend:
+        condition: service_healthy
+    mem_limit: 128m
+    memswap_limit: 256m
+    logging: *logging
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: "0"
+    networks:
+      - proxy
+
+volumes:
+  mysql_data:
+  caddy_data:
+  caddy_config:
+
+networks:
+  proxy:
+  data:
+    internal: true

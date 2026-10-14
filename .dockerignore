@@ -1,0 +1,17 @@
+.git
+.idea
+**/.DS_Store
+**/node_modules
+**/dist
+**/__pycache__
+**/*.pyc
+**/.venv
+**/venv
+**/.env
+**/.env.local
+**/.env.*.local
+fastapi-app/data
+runtime
+backups
+docs
+*.tar.gz

@@ -1,0 +1,38 @@
+{
+	email {$ACME_EMAIL}
+}
+
+{$DOMAIN} {
+	encode zstd gzip
+
+	header {
+		Content-Security-Policy "default-src 'self'; base-uri 'self'; form-action 'self'; object-src 'none'; frame-src 'none'; frame-ancestors 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data: blob:; connect-src 'self'; worker-src 'self' blob:"
+		Referrer-Policy "no-referrer"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		# Start conservatively. Increase this only after the production
+		# domain has completed an HTTPS-only observation period.
+		Strict-Transport-Security "max-age=86400"
+	}
+
+	# The application caps document files at 50 MiB; leave room for multipart headers.
+	request_body {
+		max_size 55MB
+	}
+
+	# Strip /api: the FastAPI route is /health, not /api/health.
+	handle_path /api/* {
+		reverse_proxy backend:9090 {
+			transport http {
+				response_header_timeout 180s
+			}
+		}
+	}
+
+	handle {
+		root * /srv
+		try_files {path} /index.html
+		file_server
+	}
+}

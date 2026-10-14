@@ -1,0 +1,109 @@
+/* iKnowread 全局样式 · 品牌色取自系统图标（深蓝 → 青色渐变） */
+
+:root {
+  /* 品牌色板（与 logo 一致） */
+  --ik-blue-deep: #00389d;
+  --ik-blue: #0045b7;
+  --ik-cyan: #30dad4;
+  --ik-cyan-deep: #0096b4;
+  --ik-cyan-light: #cbf5f7;
+  --ik-bg: #f2fafd;
+  --ik-text: #2a3b4d;
+  --ik-text-sub: #5c7186;
+  --ik-border: #e3eef7;
+  --ik-gradient: linear-gradient(135deg, #00389d 0%, #0045b7 35%, #0096b4 70%, #30dad4 100%);
+}
+
+/* 覆盖 Element Plus 全局变量（:root:root 抬高优先级，避免组件样式晚加载时回退默认值） */
+:root:root {
+  --el-border-radius-base: 8px;
+  --el-font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  color: var(--ik-text);
+  font-family: var(--el-font-family);
+  background-color: var(--ik-bg);
+}
+
+a {
+  color: var(--ik-blue);
+  text-decoration: none;
+  transition: color .2s;
+}
+a:hover {
+  color: var(--ik-cyan-deep);
+}
+
+/* 卡片 */
+.card {
+  background-color: #fff;
+  border: 1px solid rgba(0, 69, 183, .06);
+  border-radius: 14px;
+  padding: 16px;
+  box-shadow: 0 4px 16px rgba(0, 69, 183, .06);
+}
+
+/* 主按钮使用品牌渐变 */
+.el-button--primary:not(.is-link):not(.is-text):not(.is-plain):not(.is-disabled) {
+  background: var(--ik-gradient);
+  border: none;
+  box-shadow: 0 4px 12px rgba(0, 88, 180, .22);
+  transition: box-shadow .25s, transform .15s;
+}
+.el-button--primary:not(.is-link):not(.is-text):not(.is-plain):not(.is-disabled):hover {
+  background: linear-gradient(135deg, #0a47c4 0%, #0d55cf 35%, #0ba2bd 70%, #40dfd9 100%);
+  box-shadow: 0 6px 18px rgba(0, 106, 190, .32);
+  transform: translateY(-1px);
+}
+.el-button--primary:not(.is-link):not(.is-text):not(.is-plain):not(.is-disabled):active {
+  transform: translateY(0);
+  box-shadow: 0 3px 10px rgba(0, 88, 180, .25);
+}
+
+/* 表格 */
+html .el-table {
+  --el-table-header-bg-color: #eaf6fb;
+  --el-table-header-text-color: var(--ik-blue-deep);
+  --el-table-row-hover-bg-color: #f2fafd;
+}
+html .el-table th.el-table__cell {
+  font-weight: 600;
+}
+
+/* 弹窗 */
+html .el-dialog {
+  border-radius: 14px;
+}
+html .el-dialog__title {
+  font-weight: 600;
+  color: #24384c;
+}
+
+/* 分页激活页使用品牌渐变 */
+.el-pagination.is-background .el-pager li.is-active {
+  background-image: var(--ik-gradient);
+}
+
+/* 消息提示 */
+html .el-message {
+  border-radius: 10px;
+}
+
+/* 滚动条 */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #b9dcec; border-radius: 8px; }
+::-webkit-scrollbar-thumb:hover { background: #8fc6de; }
+
+/* 文本选中色 */
+::selection {
+  background: rgba(48, 218, 212, .35);
+}

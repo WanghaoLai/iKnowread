@@ -1,0 +1,11 @@
+fastapi~=0.143.0
+uvicorn~=0.38.0
+tortoise-orm~=0.25.1
+aiomysql~=0.3.2
+pydantic~=2.12.5
+pydantic-settings~=2.10.0
+python-multipart~=0.0.20
+httpx~=0.28.1
+cryptography~=50.0.2
+ocrmypdf~=17.13.0
+pypdfium2>=5,<6

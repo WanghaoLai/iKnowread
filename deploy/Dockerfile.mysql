@@ -1,0 +1,35 @@
+FROM golang:1.26.9-alpine3.23@sha256:6750308561953d451210ed1a8086d36c8c8bdcbf672d38d9d0d424b8a7a0216c AS gosu-build
+RUN apk add --no-cache git \
+    && git clone https://github.com/tianon/gosu.git /src/gosu \
+    && cd /src/gosu \
+    && git checkout --detach 6456aaa0f3c854d199d0f037f068eb97515b7513 \
+    && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /go/bin/gosu .
+
+FROM mysql:8.4@sha256:24989179f58856db763f418010c1169fecc944e3ec1ea7e921572d83eb070f70 AS mysql-runtime
+
+# mysql-shell is an administration client, not part of the mysqld runtime or
+# the mysql/mysqldump clients used by health checks and backups. Removing it
+# also removes its bundled Python and Go dependency trees from production.
+RUN microdnf remove -y mysql-shell \
+    && microdnf clean all \
+    && rm -rf /var/cache/dnf
+
+# The upstream entrypoint needs gosu to drop from root to the mysql user. Keep
+# that behavior while replacing the old Go runtime embedded in the binary.
+COPY --from=gosu-build /go/bin/gosu /usr/local/bin/gosu
+
+# Copy the merged runtime filesystem into one clean layer. Without this step,
+# scanners still index the replaced gosu binary and removed mysql-shell from
+# immutable base-image history even though neither file is reachable at runtime.
+FROM scratch
+COPY --from=mysql-runtime / /
+
+ENV PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    GOSU_VERSION=1.19 \
+    MYSQL_MAJOR=8.4 \
+    MYSQL_VERSION=8.4.11-1.el9
+WORKDIR /
+VOLUME ["/var/lib/mysql"]
+EXPOSE 3306 33060
+ENTRYPOINT ["docker-entrypoint.sh"]
+CMD ["mysqld"]

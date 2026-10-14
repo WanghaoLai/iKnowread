@@ -1,0 +1,20 @@
+FROM python:3.12-slim-bookworm@sha256:34386ef0cb081344d7ec1c103ba398e6e9f64e9ab3a1509accc92a4e24a07258
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    HOME=/tmp
+WORKDIR /app
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+       tesseract-ocr tesseract-ocr-eng tesseract-ocr-chi-sim \
+       fonts-noto-core fonts-noto-cjk ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+COPY fastapi-app/requirements.lock ./requirements.lock
+RUN pip install --no-cache-dir -r requirements.lock
+RUN groupadd --gid 10001 app && useradd --uid 10001 --gid app --create-home app \
+    && mkdir -p /app/data && chown app:app /app/data
+COPY --chown=app:app fastapi-app/app ./app
+COPY --chown=app:app fastapi-app/main.py ./main.py
+USER app
+EXPOSE 9090
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "9090", "--workers", "1", "--proxy-headers", "--forwarded-allow-ips", "*", "--no-access-log"]
