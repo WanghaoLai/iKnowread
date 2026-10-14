@@ -1,8 +1,15 @@
 FROM golang:1.26.9-alpine3.23@sha256:6750308561953d451210ed1a8086d36c8c8bdcbf672d38d9d0d424b8a7a0216c AS gosu-build
-RUN apk add --no-cache git \
-    && git clone https://github.com/tianon/gosu.git /src/gosu \
+ENV GOPROXY=https://mirrors.tencent.com/go,direct
+# 1. 安装 Git
+RUN apk add --no-cache git
+
+# 2. 获取固定版本的 gosu 源码
+RUN git clone https://github.com/tianon/gosu.git /src/gosu \
     && cd /src/gosu \
-    && git checkout --detach 6456aaa0f3c854d199d0f037f068eb97515b7513 \
+    && git checkout --detach 6456aaa0f3c854d199d0f037f068eb97515b7513
+
+# 3. 编译 gosu
+RUN cd /src/gosu \
     && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /go/bin/gosu .
 
 FROM mysql:8.4@sha256:24989179f58856db763f418010c1169fecc944e3ec1ea7e921572d83eb070f70 AS mysql-runtime

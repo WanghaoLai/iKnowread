@@ -27,6 +27,8 @@ class Settings(BaseSettings):
     ALLOW_REGISTRATION: bool = True
     AUTH_RATE_WINDOW_SECONDS: int = 60
     LOGIN_RATE_LIMIT: int = 10
+    CAPTCHA_RATE_LIMIT: int = 30
+    CAPTCHA_TTL_SECONDS: int = 120
     REGISTER_RATE_LIMIT: int = 3
     PASSWORD_WORKERS: int = 2
     PASSWORD_QUEUE_WAIT_SECONDS: float = 1.0

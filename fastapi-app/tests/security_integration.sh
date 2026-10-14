@@ -2,6 +2,7 @@
 set -euo pipefail
 
 base_url="${IKNOWREAD_TEST_URL:-http://127.0.0.1:9090}"
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 : "${IKNOWREAD_TEST_USER:?请设置 IKNOWREAD_TEST_USER}"
 : "${IKNOWREAD_TEST_USER_PASSWORD:?请设置 IKNOWREAD_TEST_USER_PASSWORD}"
 : "${IKNOWREAD_TEST_ADMIN:?请设置 IKNOWREAD_TEST_ADMIN}"
@@ -13,8 +14,11 @@ trap 'rm -f "$user_cookie" "$admin_cookie"' EXIT
 status="$(curl -sS -o /dev/null -w '%{http_code}' "$base_url/document/selectPage")"
 test "$status" = "401"
 
+read -r user_captcha_id user_captcha_code < <(
+  curl -sS "$base_url/captcha" | python3 "$script_dir/captcha_solver.py"
+)
 user_login="$(curl -sS -c "$user_cookie" -H 'Content-Type: application/json' \
-  -d "{\"username\":\"$IKNOWREAD_TEST_USER\",\"password\":\"$IKNOWREAD_TEST_USER_PASSWORD\",\"role\":\"user\"}" "$base_url/login")"
+  -d "{\"username\":\"$IKNOWREAD_TEST_USER\",\"password\":\"$IKNOWREAD_TEST_USER_PASSWORD\",\"role\":\"user\",\"captcha_id\":\"$user_captcha_id\",\"captcha_code\":\"$user_captcha_code\"}" "$base_url/login")"
 grep -q '"code":"200"' <<<"$user_login"
 if grep -q '"password"' <<<"$user_login"; then
   echo "login response leaked password" >&2
@@ -33,8 +37,11 @@ test "$status" = "403"
 status="$(curl -sS -b "$user_cookie" -o /dev/null -w '%{http_code}' "$base_url/files/download/admin/1/1.png")"
 test "$status" = "403"
 
+read -r admin_captcha_id admin_captcha_code < <(
+  curl -sS "$base_url/captcha" | python3 "$script_dir/captcha_solver.py"
+)
 admin_login="$(curl -sS -c "$admin_cookie" -H 'Content-Type: application/json' \
-  -d "{\"username\":\"$IKNOWREAD_TEST_ADMIN\",\"password\":\"$IKNOWREAD_TEST_ADMIN_PASSWORD\",\"role\":\"admin\"}" "$base_url/login")"
+  -d "{\"username\":\"$IKNOWREAD_TEST_ADMIN\",\"password\":\"$IKNOWREAD_TEST_ADMIN_PASSWORD\",\"role\":\"admin\",\"captcha_id\":\"$admin_captcha_id\",\"captcha_code\":\"$admin_captcha_code\"}" "$base_url/login")"
 grep -q '"code":"200"' <<<"$admin_login"
 if grep -q '"password"' <<<"$admin_login"; then
   echo "admin login response leaked password" >&2

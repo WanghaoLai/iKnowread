@@ -5,10 +5,18 @@ from app.config import settings
 from app.dependencies import CurrentAccount, get_current_account
 from app.schemas.account import AccountPublic, LoginRequest, PasswordUpdateRequest, RegisterRequest
 from app.security import issue_session_token, SESSION_COOKIE, SESSION_MAX_AGE
-from app.services import auth_service
+from app.services import auth_service, captcha_service
 from app.services.auth_guard import limit_auth
 
 router = APIRouter()
+
+
+@router.get("/captcha")
+async def captcha(request: Request, response: Response):
+    await limit_auth(request, "captcha")
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    return Result.success(await captcha_service.issue())
 
 
 @router.get("/me")
@@ -20,6 +28,7 @@ async def me(current: CurrentAccount = Depends(get_current_account)):
 @router.post("/login")
 async def login(account: LoginRequest, response: Response, request: Request):
     await limit_auth(request, "login", account.username)
+    await captcha_service.verify(account.captcha_id, account.captcha_code)
     logged_in = await auth_service.login(account.role, account.username, account.password)
     token = issue_session_token(
         logged_in.id,

@@ -21,6 +21,8 @@ class LoginRequest(StrictModel):
     username: str = Field(min_length=1, max_length=255)
     password: str = Field(min_length=1, max_length=1024)
     role: Literal["admin", "user"]
+    captcha_id: str = Field(min_length=20, max_length=100)
+    captcha_code: str = Field(min_length=5, max_length=5)
 
 
 class RegisterRequest(StrictModel):

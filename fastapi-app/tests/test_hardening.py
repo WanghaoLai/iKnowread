@@ -24,7 +24,7 @@ from app.migrations.v001_unify_accounts import (
     _prepare_legacy_password,
 )
 from app.models import Account, Document, Note
-from app.services import ai_service, auth_service
+from app.services import ai_service, auth_service, captcha_service
 from app.services.auth_guard import limiter
 from app.security import (
     SESSION_COOKIE,
@@ -77,6 +77,7 @@ class HardeningAPITests(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self):
         await self.client.aclose()
         await Tortoise.close_connections()
+        await captcha_service.clear()
         limiter.clear()
         get_storage.cache_clear()
         for item in reversed(self.patches):
@@ -87,6 +88,10 @@ class HardeningAPITests(unittest.IsolatedAsyncioTestCase):
         return await self.client.post(
             "/document/upload", files={"file": ("safe.pdf", one_page_pdf(), "application/pdf")}
         )
+
+    async def captcha_fields(self, code: str = "ABCDE") -> dict:
+        challenge = await captcha_service.issue(code)
+        return {"captcha_id": challenge["captcha_id"], "captcha_code": code}
 
     async def test_invalid_document_content_is_rejected(self):
         pdf = await self.client.post(
@@ -212,13 +217,64 @@ class HardeningAPITests(unittest.IsolatedAsyncioTestCase):
         self.app.dependency_overrides.clear()
         self.user.password = hash_password("password123")
         await self.user.save(update_fields=["password"])
-        payload = {"username": self.user.username, "password": "password123", "role": "user"}
+        payload = {
+            "username": self.user.username, "password": "password123", "role": "user",
+            **await self.captcha_fields(),
+        }
         with patch.object(settings, "LOGIN_RATE_LIMIT", 1):
             first = await self.client.post("/login", json=payload)
             second = await self.client.post("/login", json=payload)
         self.assertEqual(first.status_code, 200, first.text)
         self.assertEqual(second.status_code, 429, second.text)
         self.assertIn("Retry-After", second.headers)
+
+    async def test_invalid_login_uses_one_safe_actionable_message(self):
+        self.app.dependency_overrides.clear()
+        self.user.password = hash_password("password123")
+        await self.user.save(update_fields=["password"])
+        invalid_attempts = [
+            {"username": "missing-user", "password": "password123", "role": "user"},
+            {"username": self.user.username, "password": "wrong-password", "role": "user"},
+            {"username": self.user.username, "password": "password123", "role": "admin"},
+        ]
+        for payload in invalid_attempts:
+            limiter.clear()
+            payload.update(await self.captcha_fields())
+            response = await self.client.post("/login", json=payload)
+            self.assertEqual(response.status_code, 401, response.text)
+            self.assertEqual(response.json(), {"code": "401", "msg": "账号或密码错误"})
+            self.assertNotIn(payload["password"], response.text)
+
+    async def test_captcha_is_image_based_short_lived_and_one_time(self):
+        self.app.dependency_overrides.clear()
+        self.user.password = hash_password("password123")
+        await self.user.save(update_fields=["password"])
+
+        with patch("app.services.captcha_service._new_code", return_value="ABCDE"):
+            issued = await self.client.get("/captcha")
+        self.assertEqual(issued.status_code, 200, issued.text)
+        self.assertEqual(issued.headers.get("cache-control"), "no-store, no-cache, must-revalidate")
+        challenge = issued.json()["data"]
+        self.assertTrue(challenge["image"].startswith("data:image/png;base64,"))
+        self.assertNotIn("ABCDE", issued.text)
+
+        payload = {
+            "username": self.user.username, "password": "password123", "role": "user",
+            "captcha_id": challenge["captcha_id"], "captcha_code": "EDCBA",
+        }
+        incorrect = await self.client.post("/login", json=payload)
+        self.assertEqual(incorrect.status_code, 400, incorrect.text)
+        self.assertIn("验证码错误", incorrect.json()["msg"])
+
+        payload["captcha_code"] = "ABCDE"
+        replay = await self.client.post("/login", json=payload)
+        self.assertEqual(replay.status_code, 400, replay.text)
+        self.assertIn("验证码已失效", replay.json()["msg"])
+
+        payload.update(await self.captcha_fields())
+        successful = await self.client.post("/login", json=payload)
+        self.assertEqual(successful.status_code, 200, successful.text)
+
     async def test_logout_revokes_a_copied_session_token(self):
         self.app.dependency_overrides.clear()
         self.user.password = hash_password("password123")
@@ -229,6 +285,7 @@ class HardeningAPITests(unittest.IsolatedAsyncioTestCase):
                 "username": self.user.username,
                 "password": "password123",
                 "role": "user",
+                **await self.captcha_fields(),
             },
         )
         self.assertEqual(login.status_code, 200, login.text)

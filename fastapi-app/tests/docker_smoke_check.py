@@ -14,6 +14,8 @@ import zipfile
 import httpx
 import pypdfium2
 
+from captcha_solver import solve_response
+
 
 PDF_NAME = "docker-smoke-check.pdf"
 DOCX_NAME = "docker-smoke-check.docx"
@@ -73,11 +75,23 @@ def expect(response: httpx.Response, status: int) -> dict:
 
 
 def login(client: httpx.Client, username: str, password: str) -> None:
-    response = client.post(
-        "/api/login",
-        json={"username": username, "password": password, "role": "admin"},
-    )
-    expect(response, 200)
+    for _ in range(8):
+        captcha_id, captcha_code = solve_response(
+            expect(client.get("/api/captcha"), 200)
+        )
+        response = client.post(
+            "/api/login",
+            json={
+                "username": username, "password": password, "role": "admin",
+                "captcha_id": captcha_id, "captcha_code": captcha_code,
+            },
+        )
+        if response.status_code == 200:
+            break
+        if response.status_code != 400 or "验证码" not in response.text:
+            expect(response, 200)
+    else:
+        raise AssertionError("captcha could not be solved after 8 attempts")
     session = next(
         (cookie for cookie in client.cookies.jar if cookie.name == SESSION_COOKIE),
         None,

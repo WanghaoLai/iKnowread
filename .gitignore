@@ -16,3 +16,5 @@ vue/dist/
 /runtime/
 /backups/
 fastapi-app/data/.initial-admin-password
+
+docs

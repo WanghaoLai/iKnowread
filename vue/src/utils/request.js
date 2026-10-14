@@ -38,7 +38,7 @@ request.interceptors.response.use(
             }
         } else if (axios.isCancel(error)) {
             return Promise.reject(error)
-        } else {
+        } else if (!error.config?.skipErrorToast) {
             const message = error.response?.data?.msg || error.response?.data?.detail || '请求失败，请稍后重试'
             ElMessage.error(message)
         }

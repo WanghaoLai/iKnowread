@@ -10,6 +10,7 @@ iKnowread 使用 Vue 3 + FastAPI + MySQL，支持 PDF 与 DOCX 文档管理、�
 - `document.account_id` 通过外键关联账号，删除账号时数据库级联删除文档记录；账号角色、文档格式、文件路径与必填字段由数据库约束保护。
 - `fastapi-app/app/migrations/` 按固定顺序执行版本化迁移；应用启动不再根据 ORM 模型猜测改表。
 - 路由在 `fastapi-app/app/routers/__init__.py` 显式注册。
+- 登录验证码由后端生成 PNG 图片并保存为短时、一次性挑战；验证码通过后才执行密码校验。用户名、密码或角色错误继续使用统一提示，登录与验证码获取分别按客户端 IP 限速。
 - 文件操作只通过 `StorageBackend` 契约进行。删除先移入暂存区，数据库事务成功后再清理；启动时会恢复中断操作并清理陈旧孤儿文件。
 - PDF 由 PDF.js 通过 HTTP Range 分段读取，可在分页阅读和不分页的长文阅读之间切换；长文模式按视口懒加载页面并保留可选择文字层。DOCX 由 `docx-preview` 在浏览器连续渲染，不依赖 LibreOffice。
 
@@ -47,6 +48,8 @@ iKnowread 使用 Vue 3 + FastAPI + MySQL，支持 PDF 与 DOCX 文档管理、�
 开发服务器把 `/api` 代理到 `http://localhost:9090`。生产环境需要由同源反向代理把 `/api` 转发到 FastAPI。
 
 首次启动且数据库没有管理员时，系统会创建 `DEFAULT_ADMIN_USERNAME`，并使用 `DEFAULT_ADMIN_PASSWORD`；若密码留空，则生成随机一次性密码并写入后端数据目录的 `.initial-admin-password`（权限 `0600`）。Docker 部署时对应 `runtime/app-data/.initial-admin-password`。
+
+登录验证码默认 120 秒过期且只能使用一次，可通过 `CAPTCHA_TTL_SECONDS` 调整有效期；`CAPTCHA_RATE_LIMIT` 控制同一 IP 在认证时间窗内获取验证码的次数。当前单进程部署会在内存中保存未使用的挑战，重启后自动全部失效。
 
 ## AI服务
 

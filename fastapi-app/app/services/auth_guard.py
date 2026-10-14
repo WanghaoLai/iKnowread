@@ -54,6 +54,8 @@ def client_ip(request: Request) -> str:
 async def limit_auth(request: Request, action: str, subject: str = "") -> None:
     if action == "register":
         limit = settings.REGISTER_RATE_LIMIT
+    elif action == "captcha":
+        limit = settings.CAPTCHA_RATE_LIMIT
     else:
         limit = settings.LOGIN_RATE_LIMIT
     await limiter.check(
