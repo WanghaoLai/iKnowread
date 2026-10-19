@@ -5,7 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 SCAN_IMAGES=false
-if [[ "${1:-}" == "--scan" ]]; then
+if [[ $# -eq 1 && "${1:-}" == "--scan" ]]; then
     SCAN_IMAGES=true
 elif [[ $# -gt 0 ]]; then
     echo "用法: bash deploy/release-check.sh [--scan]" >&2
@@ -55,10 +55,11 @@ echo '[3/7] 在生产后端镜像中运行静态检查和回归测试'
 docker run --rm \
     -e "AUTH_SECRET=${AUTH_SECRET}" \
     -e PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    --mount "type=bind,src=${ROOT_DIR}/fastapi-app/tests,dst=/app/tests,readonly" \
     --mount "type=bind,src=${ROOT_DIR}/fastapi-app,dst=/source,readonly" \
     --mount "type=bind,src=${ROOT_DIR}/vue/src/api/documentContract.json,dst=/vue/src/api/documentContract.json,readonly" \
     "iknowread-backend:${APP_TAG}" \
-    sh -eu -c 'python -m pip install --target /tmp/check-tools -r /source/requirements-dev.lock >/dev/null && export PATH="/tmp/check-tools/bin:$PATH" && cd /source && ruff check --no-cache app tests scripts && python -m unittest discover -s tests -p "test_*.py"'
+    sh -eu -c 'python -m pip install --target /tmp/check-tools -r /source/requirements-dev.lock >/dev/null && export PATH="/tmp/check-tools/bin:$PATH" && cd /source && ruff check --no-cache app tests scripts && cd /app && python -m unittest discover -s tests -p "test_*.py"'
 
 echo '[4/7] 使用锁文件执行前端静态检查、测试、生产依赖审计和构建'
 docker run --rm \

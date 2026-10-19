@@ -1,17 +1,31 @@
 # Local release verification only. The unique Compose project name used by the
 # verification commands keeps its named volumes separate from production.
 services:
+  app-data-init:
+    volumes: !override
+      - app_data:/app/data
+
   db:
     ports: !override
       - "127.0.0.1:13306:3306"
 
   backend:
     environment:
+      FORWARDED_ALLOW_IPS: "172.30.31.10"
       DEFAULT_ADMIN_PASSWORD: ${VERIFY_ADMIN_PASSWORD:?Set a disposable verification password}
     ports: !override
       - "127.0.0.1:19090:9090"
 
   web:
+    networks:
+      proxy:
+        ipv4_address: 172.30.31.10
     ports: !override
       - "127.0.0.1:18080:80"
       - "127.0.0.1:18443:443"
+
+networks:
+  proxy:
+    ipam:
+      config: !override
+        - subnet: 172.30.31.0/24

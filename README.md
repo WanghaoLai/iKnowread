@@ -35,7 +35,7 @@ python3 deploy/init-env.py read.example.com you@example.com
 docker compose up -d --build      # db + backend + web 三服务，Caddy 自动 HTTPS
 ```
 
-生产镜像内置 OCRmyPDF、pypdfium2 与 Tesseract 中英文语言包，Docker 部署默认启用 OCR；资源紧张且不需要扫描 PDF 时可在 `.env` 中设置 `OCR_ENABLED=false`。
+生产镜像内置 OCRmyPDF、pypdfium2 与 Tesseract 中英文语言包；按首发方案，Docker 部署默认关闭 OCR。完成容量与扫描件验收后，可在 `.env` 中设置 `OCR_ENABLED=true` 并重建后端容器以启用。
 
 首次启动若无管理员，系统自动创建 `admin`，随机密码写入持久卷中的 `/app/data/.initial-admin-password`（权限 0600）。可执行 `docker compose exec backend cat /app/data/.initial-admin-password` 读取一次性密码。
 

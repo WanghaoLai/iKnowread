@@ -27,7 +27,7 @@
 
     <div class="card" style="margin-bottom: 5px">
       <el-table v-loading="loading" :data="data.tableData" stripe>
-        <el-table-column label="文件名" prop="name" min-width="220" show-overflow-tooltip>
+        <el-table-column label="文件名" prop="name" min-width="340" show-overflow-tooltip>
           <template #default="scope">
             <div class="doc-name">
               <el-icon class="doc-icon"><Document /></el-icon>
@@ -35,18 +35,18 @@
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="格式" align="center" width="90">
+        <el-table-column label="格式" align="center" min-width="90">
           <template #default="scope">
             <el-tag :type="tagType(scope.row.ext)" effect="light">{{ (scope.row.ext || '').toUpperCase() }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="大小" align="center" width="110">
+        <el-table-column label="大小" align="center" min-width="100">
           <template #default="scope">{{ formatSize(scope.row.size) }}</template>
         </el-table-column>
-        <el-table-column label="上传时间" align="center" width="170">
+        <el-table-column label="上传时间" align="center" min-width="160">
           <template #default="scope">{{ formatTime(scope.row.created_at) }}</template>
         </el-table-column>
-        <el-table-column label="处理状态" min-width="250">
+        <el-table-column label="处理状态" min-width="180">
           <template #default="scope">
             <div class="processing-stages">
               <el-tag

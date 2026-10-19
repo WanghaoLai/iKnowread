@@ -105,7 +105,7 @@ services:
       DOCX_MAX_ENTRIES: "2000"
       DOCX_MAX_UNCOMPRESSED_BYTES: "209715200"
       PDF_MAX_PAGES: "1000"
-      OCR_ENABLED: ${OCR_ENABLED:-true}
+      OCR_ENABLED: ${OCR_ENABLED:-false}
       OCR_LANGUAGES: "chi_sim+eng"
       OCR_WORKERS: "1"
       OCR_JOBS_PER_DOCUMENT: "1"
