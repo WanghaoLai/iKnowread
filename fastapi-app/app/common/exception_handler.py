@@ -49,27 +49,54 @@ def setup_exceptions(app: FastAPI):
     async def validate_exception_handler(request: Request, exc: RequestValidationError):
         """处理422异常"""
         return JSONResponse(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             content={"code": "422", "msg": "请求参数错误", "errors": jsonable_encoder([
                 {key: value for key, value in error.items() if key not in {"input", "ctx"}}
                 for error in exc.errors()
             ])}
         )
 
-    @app.exception_handler(Exception)
-    async def global_exception_handler(request: Request, exc: Exception):
-        # 记录调用栈和异常类型，不记录异常消息、请求正文、查询参数或请求头，
-        # 避免上游 SDK/数据库异常意外把 API Key 或用户正文写入日志。
-        stack = _stack_locations(exc)
-        correlation_id = request_id(request)
-        logger.error(
-            "unhandled_exception request_id=%s exception_type=%s\n%s",
-            correlation_id,
-            type(exc).__name__,
-            stack,
-        )
-        return JSONResponse(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            content={"code": "500", "msg": "系统错误"},
-            headers={"X-Request-ID": correlation_id},
-        )
+
+
+class SafeErrorMiddleware:
+    """Contain HTTP failures before ServerErrorMiddleware can re-raise secrets."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        response_started = False
+
+        async def tracked_send(message):
+            nonlocal response_started
+            if message["type"] == "http.response.start":
+                response_started = True
+            await send(message)
+
+        try:
+            await self.app(scope, receive, tracked_send)
+        except Exception as exc:
+            correlation_id = request_id(Request(scope))
+            # Never format the exception, its cause/context, source lines or locals.
+            logger.error(
+                "unhandled_exception request_id=%s exception_type=%s\n%s",
+                correlation_id, type(exc).__name__, _stack_locations(exc),
+            )
+            if not response_started:
+                response = JSONResponse(
+                    status_code=500,
+                    content={"code": "500", "msg": "系统错误"},
+                    headers={"X-Request-ID": correlation_id},
+                )
+                await response(scope, receive, send)
+                return
+        else:
+            return
+
+        # Streaming/background failures cannot replace an already-sent response.
+        # Raise outside the except block: no original exception context reaches
+        # Starlette/Uvicorn, while the server still terminates an incomplete stream.
+        raise RuntimeError("HTTP response failed after headers were sent") from None

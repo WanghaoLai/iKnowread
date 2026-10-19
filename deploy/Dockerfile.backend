@@ -11,10 +11,14 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 COPY fastapi-app/requirements.lock ./requirements.lock
 RUN pip install --no-cache-dir -r requirements.lock
+RUN ocrmypdf --version \
+    && tesseract --list-langs | grep -Fx eng \
+    && tesseract --list-langs | grep -Fx chi_sim
 RUN groupadd --gid 10001 app && useradd --uid 10001 --gid app --create-home app \
     && mkdir -p /app/data && chown app:app /app/data
 COPY --chown=app:app fastapi-app/app ./app
 COPY --chown=app:app fastapi-app/main.py ./main.py
+COPY --chown=app:app fastapi-app/scripts/init_app_data.py ./scripts/init_app_data.py
 USER app
 EXPOSE 9090
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "9090", "--workers", "1", "--proxy-headers", "--forwarded-allow-ips", "*", "--no-access-log"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "9090", "--workers", "1", "--proxy-headers", "--no-access-log"]

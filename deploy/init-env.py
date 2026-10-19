@@ -28,6 +28,10 @@ try:
             "ALLOW_REGISTRATION=false\n"
             "USER_STORAGE_QUOTA_BYTES=2147483648\n"
             "USER_DOCUMENT_LIMIT=200\n"
+            "USER_TOTAL_DOCUMENT_LIMIT=400\n"
+            "USER_NOTE_LIMIT=10000\n"
+            "USER_HIGHLIGHT_LIMIT=10000\n"
+            "DOCUMENT_HIGHLIGHT_LIMIT=1000\n"
             "STORAGE_MIN_FREE_BYTES=2147483648\n"
             "APP_TAG=local\n"
         )

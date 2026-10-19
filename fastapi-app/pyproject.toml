@@ -1,0 +1,13 @@
+[tool.ruff]
+target-version = "py311"
+
+[tool.ruff.lint]
+# Keep the mandatory gate focused on defects: syntax, undefined names,
+# duplicate definitions and unused imports. Broader style modernization can be
+# done incrementally without hiding correctness failures in a large baseline.
+select = ["E4", "E7", "E9", "F"]
+
+[tool.ruff.lint.per-file-ignores]
+# This import existed in the already-applied migration. Its byte checksum is a
+# deployment invariant, so historical migration source must remain untouched.
+"app/migrations/v001_unify_accounts.py" = ["F401"]

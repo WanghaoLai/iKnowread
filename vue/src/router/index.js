@@ -1,5 +1,6 @@
 import {createRouter, createWebHistory} from 'vue-router'
 import { clearSession, getSession, setSession } from '@/utils/session'
+import { fetchVerifiedSession } from './sessionGuard.js'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -16,6 +17,7 @@ const router = createRouter({
         { path: 'password', component: () => import('@/views/manager/Password.vue')},
         { path: 'home', component: () => import('@/views/manager/Home.vue')},
         { path: 'document', component: () => import('@/views/manager/Document.vue')},
+        { path: 'recycle', component: () => import('@/views/manager/Recycle.vue')},
         { path: 'reader', component: () => import('@/views/manager/Reader.vue')},
         { path: 'notes', component: () => import('@/views/manager/Notes.vue')},
         { path: 'admin', component: () => import('@/views/manager/AccountManage.vue'), props: { role: 'admin', title: '管理员信息' }},
@@ -24,6 +26,7 @@ const router = createRouter({
     },
     { path: '/login', component: () => import('@/views/Login.vue')},
     { path: '/register', component: () => import('@/views/Register.vue')},
+    { path: '/:pathMatch(.*)*', component: () => import('@/views/NotFound.vue')},
   ]
 })
 
@@ -42,13 +45,10 @@ router.beforeEach(async (to) => {
       return
     }
     try {
-      const response = await fetch(`${import.meta.env.VITE_BASE_URL || ''}/me`, { credentials: 'include' })
-      if (!response.ok) throw new Error('unauthorized')
-      const result = await response.json()
-      if (result.code !== '200' || !result.data?.id) throw new Error('unauthorized')
-      setSession(result.data)
+      const verifiedUser = await fetchVerifiedSession(import.meta.env.VITE_BASE_URL || '')
+      setSession(verifiedUser)
       lastVerifiedAt = Date.now()
-      if (['/manager/admin', '/manager/user'].includes(to.path) && result.data.role !== 'admin') {
+      if (['/manager/admin', '/manager/user'].includes(to.path) && verifiedUser.role !== 'admin') {
         return '/manager/home'
       }
     } catch (_) {

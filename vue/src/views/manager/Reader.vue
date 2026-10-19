@@ -7,13 +7,13 @@
         <span>我的文档</span>
       </div>
       <el-input v-model="data.name" style="margin-bottom: 10px" placeholder="搜索文件名" :prefix-icon="Search" clearable @input="scheduleLoad"></el-input>
-      <div class="doc-list" v-loading="data.loading">
+      <div class="doc-list" v-loading="loading">
         <div
             v-for="row in data.tableData"
             :key="row.id"
             class="doc-item"
             :class="{ active: data.selectedId === row.id }"
-            @click="select(row)"
+            @click="selectManual(row)"
         >
           <el-icon class="doc-item-icon"><Document /></el-icon>
           <div class="doc-item-info">
@@ -24,7 +24,7 @@
             </div>
           </div>
         </div>
-        <div v-if="!data.loading && !data.tableData.length" class="doc-empty">
+        <div v-if="!loading && !data.tableData.length" class="doc-empty">
           暂无文档，请先到「我的文档」上传
         </div>
       </div>
@@ -41,11 +41,29 @@
     </div>
 
     <div class="reader-panel">
-      <DocumentReader v-if="data.model" :model="data.model" />
-      <div v-else class="card reader-placeholder">
-        <el-icon :size="44"><Reading /></el-icon>
-        <div v-if="data.selectedId">{{ data.selectedName }}（{{ data.selectedExt }}）暂不支持在线预览，请下载后查看</div>
-        <div v-else>从左侧选择要阅读的文档</div>
+      <DocumentReader v-if="data.model" :model="data.model" :initial-anchor="data.initialAnchor" />
+      <div v-else v-loading="loading" class="card reader-placeholder" aria-live="polite">
+        <template v-if="data.openError">
+          <div class="placeholder-icon"><el-icon><WarningFilled /></el-icon></div>
+          <h2>无法打开文档</h2>
+          <p>{{ data.openError }}</p>
+        </template>
+        <template v-else-if="data.selectedId">
+          <div class="placeholder-icon"><el-icon><Reading /></el-icon></div>
+          <h2>暂不支持在线预览</h2>
+          <p>{{ data.selectedName }}（{{ data.selectedExt }}）请下载后查看，或从左侧选择其他文档。</p>
+        </template>
+        <template v-else>
+          <div class="placeholder-icon"><el-icon><Reading /></el-icon></div>
+          <h2>{{ !loading && !data.total ? '还没有可阅读的文档' : '选择一份文档开始阅读' }}</h2>
+          <p>{{ !loading && !data.total ? '请先上传文档，上传完成后即可在这里开始阅读。' : '从左侧“我的文档”列表中选择文件，文档内容将在此处打开。' }}</p>
+          <div v-if="data.total" class="reader-guide" aria-label="阅读操作提示">
+            <div><span>1</span><p><strong>选择阅读方式</strong>PDF 支持分页阅读和长文连续阅读，并可缩放或适应宽度。</p></div>
+            <div><span>2</span><p><strong>搜索与定位</strong>搜索文档内容，阅读进度会自动保存，再次打开可继续阅读。</p></div>
+            <div><span>3</span><p><strong>划词辅助阅读</strong>选择字、词、句或段落，可获取 AI 解释并保存为笔记或高亮备注。</p></div>
+          </div>
+          <el-button v-if="!loading && !data.total" type="primary" @click="goToDocuments">前往上传文档</el-button>
+        </template>
       </div>
     </div>
 
@@ -53,65 +71,76 @@
 </template>
 
 <script setup>
-import { onBeforeUnmount, reactive } from "vue";
-import request from "@/utils/request";
-import { Collection, Document, Reading, Search } from "@element-plus/icons-vue";
+import { onBeforeUnmount, onMounted, reactive } from "vue";
+import { useRoute, useRouter } from 'vue-router'
+import { Collection, Document, Reading, Search, WarningFilled } from "@element-plus/icons-vue";
 import { buildPreviewModel } from "@/utils/preview";
 import DocumentReader from "@/components/DocumentReader.vue";
 import { formatSize } from '@/utils/format'
+import { consumeSourceNavigation } from '@/utils/sourceAnchor'
+import { getDocumentOcrStatus, listDocuments } from '@/api/documents'
+import { useListLoader } from '@/composables/useListLoader'
+import { useBusyRefresh } from '@/composables/useBusyRefresh'
+
+const route = useRoute()
+const router = useRouter()
+const queuedAnchor = consumeSourceNavigation()
 
 const data = reactive({
   tableData: [],
   total: 0,
   pageNum: 1,
   pageSize: 20,
-  loading: false,
   name: null,
   selectedId: null,
   selectedName: '',
   selectedExt: '',
   model: null,
+  initialAnchor: queuedAnchor,
+  openError: '',
 })
 
 let searchTimer = null
-let controller = null
-let requestSequence = 0
-let ocrRefreshTimer = null
+const PAGE_SCROLL_LOCK_CLASS = 'iknowread-reader-open'
 
-const scheduleOcrRefresh = () => {
-  clearTimeout(ocrRefreshTimer)
-  if (data.tableData.some(row => ['pending', 'processing'].includes(row.ocr_status))) {
-    ocrRefreshTimer = setTimeout(load, 3000)
-  }
-}
+const { loading, load: loadList, invalidate } = useListLoader(
+  signal => listDocuments({
+    pageNum: data.pageNum,
+    pageSize: data.pageSize,
+    name: data.name,
+  }, { signal }),
+  // 请求拦截器已统一提示失败，这里保持静默
+  { cancellable: true },
+)
 
-const load = async () => {
-  controller?.abort()
-  const activeController = new AbortController()
-  controller = activeController
-  const sequence = ++requestSequence
-  data.loading = true
-  try {
-    const res = await request.get('/document/selectPage', {
-      signal: activeController.signal,
-      params: {
-        pageNum: data.pageNum,
-        pageSize: data.pageSize,
-        name: data.name
+const { schedule: scheduleOcrRefresh, stop: stopOcrRefresh } = useBusyRefresh(load, () =>
+  data.tableData.some(row => ['pending', 'processing'].includes(row.ocr_status)))
+
+async function load() {
+  const res = await loadList()
+  if (!res) return
+  data.tableData = res.data?.list || []
+  data.total = res.data?.total || 0
+  const requestedId = Number(route.query.documentId)
+  if (Number.isInteger(requestedId) && requestedId > 0) {
+    if (data.selectedId !== requestedId) {
+      let target = data.tableData.find(doc => doc.id === requestedId)
+      if (!target) {
+        try {
+          const targetResponse = await getDocumentOcrStatus(requestedId)
+          target = targetResponse.data
+        } catch (_) {
+          // 请求层已提示具体原因；这里给出页面级说明并清掉失效的定位参数，
+          // 避免落到“选择一份文档”的通用占位符里语义混淆。
+          data.openError = '该文档可能已被删除、移入回收站或无访问权限'
+          router.replace({ path: route.path, query: {} })
+          return
+        }
       }
-    })
-    if (sequence !== requestSequence) return
-    data.tableData = res.data?.list || []
-    data.total = res.data?.total || 0
-    if (!data.tableData.some(doc => doc.id === data.selectedId)) {
-      select(data.tableData[0] || null)
+      select(target, queuedAnchor)
     }
-    scheduleOcrRefresh()
-  } catch (_) {
-    // request interceptor reports real failures; cancellation is expected.
-  } finally {
-    if (sequence === requestSequence) data.loading = false
   }
+  scheduleOcrRefresh()
 }
 
 const scheduleLoad = () => {
@@ -120,12 +149,21 @@ const scheduleLoad = () => {
   searchTimer = setTimeout(load, 300)
 }
 
-const select = (row) => {
+const select = (row, anchor = null) => {
+  data.openError = ''
   data.selectedId = row?.id ?? null
   data.selectedName = row?.name || ''
   data.selectedExt = (row?.ext || '').toUpperCase()
   data.model = row ? buildPreviewModel(row) : null
+  data.initialAnchor = anchor
 }
+
+const selectManual = row => {
+  if (route.query.documentId) router.replace({ path: route.path, query: {} })
+  select(row)
+}
+
+const goToDocuments = () => router.push('/manager/document')
 
 const ocrLabel = (status) => ({
   pending: '等待识别',
@@ -135,10 +173,16 @@ const ocrLabel = (status) => ({
 }[status] || '未处理')
 
 load()
+onMounted(() => {
+  document.documentElement.classList.add(PAGE_SCROLL_LOCK_CLASS)
+  document.body.classList.add(PAGE_SCROLL_LOCK_CLASS)
+})
 onBeforeUnmount(() => {
+  document.documentElement.classList.remove(PAGE_SCROLL_LOCK_CLASS)
+  document.body.classList.remove(PAGE_SCROLL_LOCK_CLASS)
   clearTimeout(searchTimer)
-  clearTimeout(ocrRefreshTimer)
-  controller?.abort()
+  stopOcrRefresh()
+  invalidate()
 })
 </script>
 
@@ -146,11 +190,15 @@ onBeforeUnmount(() => {
 .reader-page {
   display: flex;
   gap: 10px;
-  height: calc(100vh - 60px - 28px);
+  width: 100%;
+  height: 100%;
+  min-height: 0;
   padding: 0;
+  overflow: hidden;
 }
 .doc-panel {
   width: 260px;
+  min-height: 0;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
@@ -167,7 +215,9 @@ onBeforeUnmount(() => {
 .panel-title .el-icon { color: var(--ik-blue); }
 .doc-list {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
+  overscroll-behavior: contain;
 }
 .doc-pagination {
   justify-content: center;
@@ -216,6 +266,9 @@ onBeforeUnmount(() => {
 .reader-panel {
   flex: 1;
   min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
 }
 .reader-placeholder {
   height: 100%;
@@ -223,8 +276,39 @@ onBeforeUnmount(() => {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 12px;
+  gap: 10px;
+  padding: clamp(24px, 5vw, 56px);
+  overflow-y: auto;
   color: var(--ik-text-sub);
+  text-align: center;
 }
-.reader-placeholder .el-icon { color: var(--ik-blue); }
+.placeholder-icon {
+  display: grid;
+  width: 68px;
+  height: 68px;
+  place-items: center;
+  margin-bottom: 4px;
+  color: #fff;
+  font-size: 34px;
+  background: var(--ik-gradient);
+  border-radius: 22px;
+  box-shadow: 0 12px 28px rgba(0, 105, 185, .16);
+}
+.reader-placeholder h2 { margin: 0; color: #24384c; font-size: 22px; }
+.reader-placeholder > p { max-width: 620px; margin: 0; font-size: 14px; line-height: 1.7; }
+.reader-guide {
+  display: grid;
+  width: min(720px, 100%);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+  text-align: left;
+}
+.reader-guide > div { display: flex; align-items: flex-start; gap: 9px; padding: 13px; background: #f6fafc; border: 1px solid #e5eef3; border-radius: 11px; }
+.reader-guide > div > span { display: grid; width: 22px; height: 22px; flex: none; place-items: center; color: #fff; font-size: 11px; font-weight: 700; background: var(--ik-cyan-deep); border-radius: 50%; }
+.reader-guide p { margin: 0; font-size: 12px; line-height: 1.55; }
+.reader-guide strong { display: block; margin-bottom: 3px; color: #33475e; font-size: 13px; }
+@media (max-width: 900px) {
+  .reader-guide { grid-template-columns: 1fr; }
+}
 </style>

@@ -1,13 +1,13 @@
 // 统一文档语义模型 + 预览适配器注册表（Adapter 模式）
 //
-// 语义模型: { id, title, sourceFormat, engine, url, ocrStatus, ocrError, ocrUpdatedAt }
+// 语义模型: { id, title, sourceFormat, engine, url, contentVersion, ocrStatus, ocrError }
 // 引擎: pdfjs（PDF.js 画布渲染）| docx（docx-preview 浏览器原生渲染）
 // 当前支持范围: PDF、DOCX。
-const BASE = import.meta.env.VITE_BASE_URL || ''
+import { documentDownloadUrl, documentPreviewUrl } from '../api/documentPaths.js'
 
 const ADAPTERS = {
-  pdf: { engine: 'pdfjs', source: id => `${BASE}/document/preview/${id}` },
-  docx: { engine: 'docx', source: id => `${BASE}/document/download/${id}` },
+  pdf: { engine: 'pdfjs', source: documentPreviewUrl },
+  docx: { engine: 'docx', source: documentDownloadUrl },
 }
 
 export function buildPreviewModel(row) {
@@ -20,6 +20,7 @@ export function buildPreviewModel(row) {
     sourceFormat: ext,
     engine: adapter.engine,
     url: adapter.source(row.id),
+    contentVersion: row.content_version || '',
     ocrStatus: row.ocr_status || (ext === 'pdf' ? 'pending' : 'not_applicable'),
     ocrError: row.ocr_error || '',
     ocrUpdatedAt: row.ocr_updated_at || '',

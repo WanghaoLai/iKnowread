@@ -1,92 +1,146 @@
 # iKnowread
 
-iKnowread 使用 Vue 3 + FastAPI + MySQL，支持 PDF 与 DOCX 文档管理、在线阅读和多模型智能助手。后端需要 Python 3.11 或更新版本。
+> 自托管的文档阅读与知识沉淀平台：把你的 PDF / DOCX 变成可划词理解、可高亮标注、可沉淀笔记的私有知识库。Vue 3 + FastAPI + MySQL，Docker 一键部署。
 
-生产部署已加入 DOCX 活动内容隔离、认证限速、受控密码计算、关闭式注册、账号存储配额、文档结构验证、AI 并发边界、数据库就绪探针和一致性备份保护。Docker 默认关闭自助注册与 OCR，可在完成容量评估后显式开启。
+## 为什么需要 iKnowread
+
+扫描版 PDF 读不了文字、划词要切词典、笔记散落在各处、AI 阅读助手把你的文件和密钥送上第三方云端——iKnowread 把这些拉回你自己手里：
+
+- **阅读器原生可用**：上传即可读。扫描 PDF 后台 OCR 后文字可选可搜；阅读进度自动保存。
+- **理解即沉淀**：划词调用你自己账号的大模型解释，一键保存为高亮备注或笔记，原文位置可随时回跳。
+- **数据完全自持**：文档、笔记、高亮存你自己的服务器；AI API Key 由后端 Fernet 加密保存，不经过任何中间方。
+
+## 功能全景
+
+| 模块 | 能力 |
+|------|------|
+| 我的文档 | PDF / DOCX 上传（单文件 ≤ 50MB，内容级校验）、预览、OCR 状态查看与重试、删除（进回收站） |
+| 我的回收站 | 已删文档一键恢复（高亮、笔记关联、阅读进度一并复原）或彻底删除 |
+| 在线阅读 | PDF 分页 / 长文双模式、文档内搜索、缩放；DOCX 连续阅读；阅读进度按内容版本记忆 |
+| 划词解释与高亮 | 选中文本自动调用当前账号配置的模型解释；解释可直接保存为持久化高亮备注，重开文档高亮仍在，可编辑、定位、删除 |
+| 我的笔记 | AI 划词笔记与手动笔记、全文检索、按来源文档筛选编排、批量导出 Markdown；删除文档不丢笔记 |
+| 智能助手 | 多轮问答，上下文最多 20 轮 / 120,000 字符 |
+| API 配置 | 每账号多份配置（DeepSeek / 智谱 GLM / Xiaomi MiMo / 阿里云百炼），密钥加密存储、在线测试、一键切换 |
+| 账号管理 | 管理员创建账号、分配角色；注册默认关闭；账号存储配额与文档数量限额 |
+
+## 快速开始
+
+### Docker 部署（推荐）
+
+面向 Ubuntu 24.04（4 核 4GB）的完整步骤见 [Docker 部署教程](docs/Ubuntu-24.04-Docker部署教程.md)。最短路径：
+
+```bash
+# 域名与证书联系人邮箱（不覆盖已有 .env）
+python3 deploy/init-env.py read.example.com you@example.com
+docker compose up -d --build      # db + backend + web 三服务，Caddy 自动 HTTPS
+```
+
+生产镜像内置 OCRmyPDF、pypdfium2 与 Tesseract 中英文语言包，Docker 部署默认启用 OCR；资源紧张且不需要扫描 PDF 时可在 `.env` 中设置 `OCR_ENABLED=false`。
+
+首次启动若无管理员，系统自动创建 `admin`，随机密码写入持久卷中的 `/app/data/.initial-admin-password`（权限 0600）。可执行 `docker compose exec backend cat /app/data/.initial-admin-password` 读取一次性密码。
+
+从旧版升级时，启动前置任务会在新持久卷为空的前提下自动导入原 `runtime/app-data`；卷内已有数据时会拒绝自动合并，避免覆盖现有文件。
+
+### 本地开发
+
+前置条件：Python 3.11+、Node.js 20.19+、MySQL 8；本地启用 OCR 时还需要 OCRmyPDF、Tesseract 与 Ghostscript。
+
+```bash
+# 1. 配置环境
+cp fastapi-app/.env.example fastapi-app/.env   # 填 MySQL 连接、AUTH_SECRET、CORS_ORIGINS
+
+# 2. OCR 系统依赖（可选；同时把 OCR_ENABLED 改为 true）
+brew install tesseract tesseract-lang ghostscript          # macOS
+sudo apt-get install tesseract-ocr tesseract-ocr-chi-sim ghostscript  # Debian / Ubuntu
+
+# 3. 后端
+cd fastapi-app
+python3 -m pip install -r requirements.txt
+python3 -m uvicorn main:app --reload --port 9090
+
+# 4. 前端（新终端）
+cd vue
+npm ci
+npm run dev    # 开发服务器把 /api 代理到 http://localhost:9090
+```
+
+开发环境不配置 `AUTH_SECRET` 时会生成仅本次进程有效的临时密钥；生产必须显式配置。`requirements.txt` 是直接依赖范围，生产镜像使用经过回归验证的 `requirements.lock` 精确版本。
 
 ## 架构
 
-- `fastapi-app/app/models/account.py` 是唯一账号模型，`role` 区分管理员和用户。
-- `document.account_id` 通过外键关联账号，删除账号时数据库级联删除文档记录；账号角色、文档格式、文件路径与必填字段由数据库约束保护。
-- `fastapi-app/app/migrations/` 按固定顺序执行版本化迁移；应用启动不再根据 ORM 模型猜测改表。
-- 路由在 `fastapi-app/app/routers/__init__.py` 显式注册。
-- 登录验证码由后端生成 PNG 图片并保存为短时、一次性挑战；验证码通过后才执行密码校验。用户名、密码或角色错误继续使用统一提示，登录与验证码获取分别按客户端 IP 限速。
-- 文件操作只通过 `StorageBackend` 契约进行。删除先移入暂存区，数据库事务成功后再清理；启动时会恢复中断操作并清理陈旧孤儿文件。
-- PDF 由 PDF.js 通过 HTTP Range 分段读取，可在分页阅读和不分页的长文阅读之间切换；长文模式按视口懒加载页面并保留可选择文字层。DOCX 由 `docx-preview` 在浏览器连续渲染，不依赖 LibreOffice。
+```
+vue/            Vue 3 + Element Plus 前端（PDF.js / docx-preview 浏览器端渲染）
+fastapi-app/    FastAPI 后端
+  app/routers/    路由层（REST：/documents /notes /highlights /accounts /ai /files）
+  app/services/   业务层（文档、OCR、高亮、笔记、认证、AI、资源限额）
+  app/models/     Tortoise ORM 模型（MySQL）
+  app/migrations/ 版本化迁移 v001–v011（校验和保护，禁止改写已执行历史）
+  app/storage/    存储抽象（StorageBackend 契约，本地实现）
+deploy/         Docker Compose、Caddy、备份与发布门禁脚本
+docs/           部署教程
+```
 
-## 本地运行
+关键设计：
 
-1. 复制 `fastapi-app/.env.example` 为 `fastapi-app/.env`，配置 MySQL、`AUTH_SECRET` 和可信 `CORS_ORIGINS`。
-2. 安装 OCR 运行环境。Tesseract 负责识别，OCRmyPDF 与 PDFium 已由 Python 依赖安装；中文识别需要 `chi_sim` 语言包：
+- **删除即回收站**：删除文档只标记 `deleted_at`，文件、高亮、笔记关联原样保留；彻底删除走"暂存→事务删行→删文件→失败回滚"，每小时对账循环兜底恢复中断现场。
+- **内容版本协议**：每个文档有不可复用的 `content_version`；高亮与 AI 解释都绑定版本，OCR 重处理换版本后旧定位自动失效，防止错位引用。
+- **统一来源锚点**（`iknowread.source-anchor/v1`）：高亮与笔记的原文定位用「偏移 + 精确引文 + 前后文」双保险，排版变化后仍可重新解析定位。
+- **存储只走契约**：文件操作不直接触盘，全部经 `StorageBackend`；换存储后端不改业务代码。
+- **单实例不变式**：内存级保护（账号锁、上传并发门、AI 信号量）依赖单后端实例，启动时以 MySQL `GET_LOCK` 强制保证。
+- **账号模型唯一**：`role` 区分管理员与用户；角色、格式、路径与必填字段由数据库约束保护。
 
-   ```bash
-   # macOS
-   brew install tesseract tesseract-lang
+## 配置参考
 
-   # Debian / Ubuntu
-   sudo apt-get install tesseract-ocr tesseract-ocr-chi-sim
-   ```
+常用环境变量（完整清单见 `fastapi-app/.env.example` 与 `app/config.py`）：
 
-3. 安装并启动后端：
-
-   ```bash
-   cd fastapi-app
-   python3 -m pip install -r requirements.txt
-   python3 -m uvicorn main:app --reload --port 9090
-   ```
-
-   `requirements.txt` 表达本地开发所需的直接依赖范围；生产 Docker 镜像使用 `requirements.lock` 中经过回归验证的完整精确版本。新增或升级依赖后，应先更新直接依赖、完成全套测试，再从验证通过的镜像重新生成锁文件。
-
-4. 安装并启动前端：
-
-   ```bash
-   cd vue
-   npm ci
-   npm run dev
-   ```
-
-开发服务器把 `/api` 代理到 `http://localhost:9090`。生产环境需要由同源反向代理把 `/api` 转发到 FastAPI。
-
-首次启动且数据库没有管理员时，系统会创建 `DEFAULT_ADMIN_USERNAME`，并使用 `DEFAULT_ADMIN_PASSWORD`；若密码留空，则生成随机一次性密码并写入后端数据目录的 `.initial-admin-password`（权限 `0600`）。Docker 部署时对应 `runtime/app-data/.initial-admin-password`。
-
-登录验证码默认 120 秒过期且只能使用一次，可通过 `CAPTCHA_TTL_SECONDS` 调整有效期；`CAPTCHA_RATE_LIMIT` 控制同一 IP 在认证时间窗内获取验证码的次数。当前单进程部署会在内存中保存未使用的挑战，重启后自动全部失效。
-
-## AI服务
-
-普通用户和管理员均可从左侧「AI服务」进入两个子页面：
-
-- **API配置**：统一管理 DeepSeek、智谱 GLM、Xiaomi MiMo 和阿里云百炼配置。每个账号可保存多项配置，分别设置官方 Base URL、API Key、模型 ID、温度、最大输出 token 数、深度思考和系统提示词，并测试、启用、切换或删除配置。配置保存后，打开模型下拉框会使用已加密保存的密钥从厂商接口获取当前账号可用模型，也可手动刷新或输入模型 ID；厂商不支持模型枚举时自动回退到常用模型建议。新建配置必须填写密钥，编辑时留空会保留原密钥。
-- **智能助手**：使用当前账号启用的配置问答，也可在页面顶部直接切换已保存配置；切换时自动开始新对话，避免混用不同模型的上下文。支持连续追问、Enter 发送、Shift + Enter 换行、新建对话、加载状态和失败后保留问题。采用非流式回答，每次携带最近 20 轮且不超过 120,000 字符的上下文；会话仅保留在当前页面，离开或刷新后清空。
-- **在线阅读与选文解释**：PDF 可随时切换「分页阅读」和「长文阅读」，浏览器会记住阅读偏好；分页模式使用预览区底部中央的悬浮箭头翻页，长文模式连续展示全部页面并只渲染视口附近内容。DOCX 默认连续阅读。在任一模式中拖动选择字、词、句或段，系统会在选区附近自动调用当前账号配置的模型并显示解释。PDF 通过与画布对齐的文字层支持选择。扫描版或图文混合 PDF 上传后进入后台 OCR 队列，系统保留原文件、生成带隐藏文字层的派生 PDF，完成后阅读页自动刷新；失败时可查看状态并一键重试。单次最多选择 4,000 个字符，相同选文在当前预览期间使用内存缓存，换页、滚动或切换文档会收起窗口。
-- **我的笔记**：选文解释弹窗支持直接保存，或先补充个人备注再保存；也可在笔记页手动创建、编辑和删除笔记。列表支持全文检索、来源文档筛选、按时间排序和按文档编排，并可把当前筛选结果一键导出为 Markdown。笔记按账号隔离，保存文档名称快照；原文档删除后笔记仍保留并可继续检索和导出。
-
-所有厂商通过同一配置模型和调用流程管理，厂商适配器负责官方地址校验、思考参数和输出 token 字段差异。接口依据 [DeepSeek](https://api-docs.deepseek.com/)、[智谱 GLM](https://docs.bigmodel.cn/cn/best-practice/case/ai-search-engine)、[Xiaomi MiMo](https://mimo.mi.com/docs/quick-start/model) 和 [阿里云百炼](https://help.aliyun.com/zh/model-studio/qwen-api-via-openai-chat-completions/) 的 OpenAI 兼容接口；配置页提供常用模型建议，也可手动填写账号实际可用的模型 ID。系统最大输出限制为 32,768 token，接口总等待上限 125 秒。
-
-新增依赖后需执行 `python3 -m pip install -r requirements.txt` 并重启后端。启动时自动执行版本 3 迁移创建 `ai_config` 表，版本 4 增加文档 OCR，版本 5 将单配置迁移为多厂商、多配置结构并保留原 DeepSeek 配置，版本 6 创建用户笔记表，版本 7 增加可撤销会话版本。配置和笔记均按账号隔离；配置名称在账号内唯一，删除账号时级联删除其配置和笔记。后端提供厂商目录和配置增删改查、测试及启用接口，并保留 `GET/PUT /ai/config`、`POST /ai/test` 兼容入口；`POST /ai/chat` 与 `POST /ai/explain` 始终使用当前启用配置。笔记接口提供创建、编辑、删除、搜索、汇总和 Markdown 导出。所有接口均需登录，账号身份只从登录会话读取；退出会递增账号会话版本，使同一账号此前签发的 Cookie 和 Bearer 令牌立即失效。
-
-API Key 由后端 Fernet 加密保存，读取接口仅返回 `has_api_key`，不向浏览器回传密钥。默认首次保存时自动生成 `fastapi-app/data/.ai-config-key`（权限 0600），请将该文件与数据库分别持久化备份。多实例部署应设置相同的 `AI_CONFIG_KEY`；可通过 `python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` 生成。丢失或更换加密密钥后，各账号需要重新填写 API Key。
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `AUTH_SECRET` | 空（必填） | 会话签名密钥；生产留空拒绝启动 |
+| `ALLOW_REGISTRATION` | `false` | 自助注册开关 |
+| `DB_HOST` / `DB_PORT` / `DB_USER` / `DB_PASSWORD` / `DB_DATABASE` | localhost / 3306 / iknowread / 空 / iknowread | MySQL 连接 |
+| `CORS_ORIGINS` | 空 | 可信前端源，逗号分隔；生产禁用 `*` |
+| `USER_STORAGE_QUOTA_BYTES` | 2GB | 单账号磁盘配额（含回收站文件） |
+| `USER_DOCUMENT_LIMIT` | 200 | 单账号活跃文档数上限 |
+| `USER_TOTAL_DOCUMENT_LIMIT` | 400 | 单账号文档总数上限（含回收站） |
+| `USER_NOTE_LIMIT` | 10000 | 单账号笔记数上限 |
+| `USER_HIGHLIGHT_LIMIT` | 10000 | 单账号高亮总数上限 |
+| `DOCUMENT_HIGHLIGHT_LIMIT` | 1000 | 单文档高亮数及单次加载上限 |
+| `OCR_ENABLED` | 本地 `false` / Docker `true` | PDF OCR 队列开关 |
+| `AI_CONFIG_KEY` | 自动生成 | API Key 加密密钥；多实例必须一致 |
+| `AI_GLOBAL_CONCURRENCY` | 3 | 全站 AI 并发上限 |
 
 ## 验证
 
 ```bash
+# 后端（静态检查 + 单元测试）
 cd fastapi-app
-python3 -m compileall -q app tests
-python3 -m unittest discover -s tests -p 'test_*.py' -v
-python3 tests/database_security_check.py
+ruff check app tests scripts
+python3 -m pytest
 
-IKNOWREAD_TEST_USER=<user> \
-IKNOWREAD_TEST_USER_PASSWORD=<password> \
-IKNOWREAD_TEST_ADMIN=<admin> \
-IKNOWREAD_TEST_ADMIN_PASSWORD=<password> \
-bash tests/security_integration.sh
+# 已运行实例的数据库约束检查
+python3 scripts/database_security_check.py
 
+# 前端（静态检查 + 测试 + 生产构建）
 cd ../vue
-npm ci
-npm run build
+npm ci && npm run check
+
+# 正式发布门禁（构建生产镜像，并启动一次性隔离栈做重启与数据验收）
+cd ..
+bash deploy/release-check.sh
 ```
 
-仓库还提供 `deploy/compose.verify.yaml` 和 `fastapi-app/tests/docker_smoke_check.py`，用于在独立项目名和一次性卷中验证生产镜像、MySQL 迁移、本地 HTTPS、登录 Cookie、上传、笔记、重启持久性及 PDF Range。该覆盖文件要求显式传入一次性 `VERIFY_ADMIN_PASSWORD`，不能复用正式管理员密码。
+`deploy/release-check.sh` 会组合 `deploy/compose.verify.yaml` 与 `fastapi-app/scripts/docker_smoke_check.py`，在独立项目名与一次性卷中验证生产镜像、真实图片型 PDF 的 OCR 文字层、迁移、HTTPS、会话与角色隔离、上传、笔记、高亮、进程重启持久性及数据库约束，完成后自动删除测试容器和卷。前后端文档 API 路径由 `vue/src/api/documentContract.json` 单一契约描述，`tests/test_document_contract.py` 保证后端路由与契约一致。
 
-## Docker 云端部署
+## 安全与边界
 
-针对 Ubuntu 24.04、2 核 2GB 内存服务器的完整步骤，见 [Docker 部署教程](docs/Ubuntu-24.04-Docker部署教程.md)。配套 `compose.yaml` 和 `deploy/` 提供 HTTPS、持久化、资源限制和备份脚本；生产基础镜像使用 digest 固定，Python 生产依赖使用精确锁文件；默认关闭 OCR，可按教程启用。
+- 密码 PBKDF2-SHA256（600k 迭代）；会话 HMAC 签名并绑定密码指纹，改密或退出立即吊销历史令牌。
+- 登录、验证码、注册分别按客户端 IP 与账号双维度滑动窗口限速；验证码短时一次性。
+- 上传有内容级校验（PDF 结构 / DOCX zip-bomb 三重防护）与全站并发门；账号配额与服务器保留空间双重限额。
+- AI 外呼禁用自动重试与重定向跟随，响应字节封顶；API Key 加密存储，读取接口只返回 `has_api_key`。
+- 所有接口需登录；账号身份只从会话读取，文档 / 笔记 / 高亮 / 配置按账号隔离。
+
+## 运维
+
+- **备份**：`deploy/backup.sh`（flock 防并发，停写保证数据库与文件快照一致）；`deploy/verify-backup.sh` 验证备份可恢复。
+- **发布门禁**：`deploy/release-check.sh` 在发布前跑完整校验。
+- **AI Key 备份提醒**：`AI_CONFIG_KEY` 默认生成于 `fastapi-app/data/.ai-config-key`，与数据库需分别持久化；丢失后各账号需重填 API Key。

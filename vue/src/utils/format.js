@@ -8,3 +8,6 @@ export function formatSize(size) {
 export function formatTime(value) {
   return value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '-'
 }
+
+// 文档扩展名 → el-tag 颜色类型
+export const documentTagType = ext => ({ pdf: 'danger', docx: '' }[ext] ?? 'info')

@@ -2,12 +2,22 @@ import { ElMessage } from 'element-plus'
 import router from '../router'
 import axios from "axios";
 import { clearSession } from './session'
+import { extractRequestErrorMessage } from './requestError'
 
 const request = axios.create({
     baseURL: import.meta.env.VITE_BASE_URL,
     withCredentials: true,
     timeout: 30000  // 后台接口超时时间设置
 })
+
+export async function notifyRequestError(error, fallback = '请求失败，请稍后重试') {
+    if (axios.isCancel(error) || error?.userNotified) return
+    // Reserve this error before awaiting Blob.text(), so the interceptor and
+    // local catch cannot display the same failure twice.
+    if (error && typeof error === 'object') error.userNotified = true
+    const message = await extractRequestErrorMessage(error, fallback)
+    ElMessage.error(message)
+}
 
 // request 拦截器
 // 可以自请求发送前对请求做一些处理
@@ -33,14 +43,13 @@ request.interceptors.response.use(
         if (error.response?.status === 401) {
             clearSession()
             if (router.currentRoute.value.path !== '/login') {
-                ElMessage.error(error.response?.data?.msg || '登录状态已失效，请重新登录')
+                notifyRequestError(error, '登录状态已失效，请重新登录')
                 router.push('/login')
             }
         } else if (axios.isCancel(error)) {
             return Promise.reject(error)
         } else if (!error.config?.skipErrorToast) {
-            const message = error.response?.data?.msg || error.response?.data?.detail || '请求失败，请稍后重试'
-            ElMessage.error(message)
+            notifyRequestError(error)
         }
         return Promise.reject(error)
     }

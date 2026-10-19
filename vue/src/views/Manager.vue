@@ -44,6 +44,10 @@
             <el-icon><Document /></el-icon>
             <span>我的文档</span>
           </el-menu-item>
+          <el-menu-item index="/manager/recycle">
+            <el-icon><Delete /></el-icon>
+            <span>我的回收站</span>
+          </el-menu-item>
           <el-menu-item index="/manager/reader">
             <el-icon><Reading /></el-icon>
             <span>在线阅读</span>
@@ -77,7 +81,10 @@
         </el-menu>
       </aside>
 
-      <main class="layout-main">
+      <main
+          class="layout-main"
+          :class="{ 'layout-main--reader': router.currentRoute.value.path === '/manager/reader' }"
+      >
         <router-view @updateUser="updateUser" />
       </main>
     </div>
@@ -91,7 +98,7 @@ import { fileUrl, DEFAULT_AVATAR } from "@/utils/file";
 import request from "@/utils/request";
 import router from "@/router";
 import {ElMessage} from "element-plus";
-import { ArrowDown, Avatar, ChatDotRound, Document, Expand, Fold, HomeFilled, Lock, Notebook, Reading, Setting, SwitchButton, User } from '@element-plus/icons-vue'
+import { ArrowDown, Avatar, ChatDotRound, Delete, Document, Expand, Fold, HomeFilled, Lock, Notebook, Reading, Setting, SwitchButton, User } from '@element-plus/icons-vue'
 import { clearSession, getSession } from '@/utils/session'
 
 const data = reactive({
@@ -116,11 +123,21 @@ const updateUser = () => {
 }
 
 const logout = async () => {
-  try { await request.post('/logout') } finally {
-    ElMessage.success('退出成功')
+  let serverConfirmed = false
+  try {
+    await request.post('/logout', null, { skipErrorToast: true })
+    serverConfirmed = true
+  } catch (error) {
+    // 401 表示该服务端会话已经失效，注销目标已经达成。
+    serverConfirmed = error.response?.status === 401
+    if (!serverConfirmed) {
+      ElMessage.warning('本地登录资料已清除，但服务器未确认注销，当前会话可能仍然有效，请稍后重试')
+    }
+  } finally {
     clearSession()
-    router.push('/login')
+    await router.push('/login')
   }
+  if (serverConfirmed) ElMessage.success('退出成功')
 }
 
 const handleAccountCommand = (command) => {
@@ -137,6 +154,7 @@ const handleAccountCommand = (command) => {
 /* 固定壳层：视口高度锁定，顶部栏与侧边栏固定，仅内容区滚动 */
 .layout {
   height: 100vh;
+  height: 100dvh;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -272,10 +290,15 @@ const handleAccountCommand = (command) => {
   flex: 1;
   width: 0;
   min-width: 0;
+  min-height: 0;
   background-color: var(--ik-bg);
   padding: 14px;
   overflow-y: auto;       /* 仅内容区滚动 */
   overscroll-behavior: contain;
+}
+.layout-main--reader {
+  overflow: hidden;
+  overflow: clip;
 }
 
 /* 侧边导航 */

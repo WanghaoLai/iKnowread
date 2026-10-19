@@ -55,11 +55,27 @@ class StorageBackend(ABC):
 
     @staticmethod
     def safe_key(key: str) -> str:
-        name = key.replace("\\", "/").split("/")[-1]
+        name = key.replace("\\", "/").split("/")[-1].strip()
         if not name or name in (".", "..") or ".." in name:
             from app.common.exception_handler import CustomException
             raise CustomException("非法文件名")
-        return name
+        name = "".join("_" if ord(character) < 32 else character for character in name)
+        # LocalStorage prefixes 13 ASCII bytes. Keep the final component below
+        # common 255-byte filesystem limits while preserving a short extension.
+        if len(name.encode("utf-8")) <= 220:
+            return name
+        dot = name.rfind(".")
+        extension = name[dot:] if 0 < dot and len(name[dot:].encode("utf-8")) <= 20 else ""
+        stem = name[:dot] if extension else name
+        budget = 220 - len(extension.encode("utf-8"))
+        encoded = stem.encode("utf-8")[:budget]
+        while True:
+            try:
+                stem = encoded.decode("utf-8")
+                break
+            except UnicodeDecodeError:
+                encoded = encoded[:-1]
+        return (stem.rstrip() or "file") + extension
 
     @staticmethod
     def safe_path(key: str) -> str:

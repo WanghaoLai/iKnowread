@@ -19,18 +19,7 @@ def setup_observability(app: FastAPI) -> None:
         correlation_id = secrets.token_hex(12)
         request.state.request_id = correlation_id
         started = time.perf_counter()
-        try:
-            response = await call_next(request)
-        except Exception as exc:
-            elapsed_ms = (time.perf_counter() - started) * 1000
-            logger.warning(
-                "request_aborted request_id=%s method=%s status=500 duration_ms=%.2f exception_type=%s",
-                correlation_id,
-                request.method,
-                elapsed_ms,
-                type(exc).__name__,
-            )
-            raise
+        response = await call_next(request)
 
         route = request.scope.get("route")
         route_template = getattr(route, "path", "<unmatched>")

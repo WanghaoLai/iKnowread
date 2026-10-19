@@ -3,7 +3,14 @@
     <div class="card" style="padding: 30px">
       <el-form ref="formRef" :model="data.user" :rules="data.rules" label-width="100px" style="padding-right: 50px">
         <div style="margin: 20px 0; text-align: center">
-          <el-upload :show-file-list="false" class="avatar-uploader" :action="uploadUrl" :data="{ account_id: data.user.id, role: data.user.role }" :on-success="handleFileUpload">
+          <el-upload
+              :show-file-list="false"
+              class="avatar-uploader"
+              :data="{ account_id: data.user.id, role: data.user.role }"
+              :http-request="uploadAvatar"
+              :on-success="avatarHandlers.onSuccess"
+              :on-error="avatarHandlers.onError"
+          >
             <img v-if="data.user.avatar" :src="fileUrl(data.user.avatar)" class="avatar" />
             <el-icon v-else class="avatar-uploader-icon"><Plus /></el-icon>
           </el-upload>
@@ -15,7 +22,7 @@
           <el-input v-model="data.user.name" autocomplete="off" />
         </el-form-item>
         <div style="text-align: center">
-          <el-button type="primary" :icon="Check" @click="save">保存</el-button>
+          <el-button type="primary" :icon="Check" :loading="data.submitting" @click="save">保存</el-button>
         </div>
       </el-form>
     </div>
@@ -24,18 +31,17 @@
 
 <script setup>
 import {reactive, ref} from "vue"
-import request from "@/utils/request";
-import { fileUrl } from "@/utils/file";
+import request, { notifyRequestError } from "@/utils/request";
+import { uploadAvatar } from "@/api/files";
+import { fileUrl, avatarUploadHandlers } from "@/utils/file";
 import { Check, Plus } from "@element-plus/icons-vue";
 import {ElMessage} from "element-plus";
 import { getSession, setSession } from '@/utils/session'
 
-// 文件上传的接口地址
-const uploadUrl = import.meta.env.VITE_BASE_URL + '/files/upload'
-
 const formRef = ref()
 const data = reactive({
   user: getSession(),
+  submitting: false,
   rules: {
     username: [
       {required: true, message: '请输入账号', trigger: 'blur'}
@@ -46,33 +52,40 @@ const data = reactive({
   }
 })
 
-const handleFileUpload = (file) => {
-  data.user.avatar = file.data
-}
+// 头像上传回调：成功把返回的相对路径写入当前用户，失败统一提示
+const avatarHandlers = avatarUploadHandlers(path => { data.user.avatar = path })
 
 const emit = defineEmits(["updateUser"])
 // 把当前修改的用户信息存储到后台数据库
-const save = () => {
-  formRef.value.validate(valid => {
-    if (valid) {
-      if (['admin', 'user'].includes(data.user.role)) {
-        request.put('/accounts/' + data.user.id, {
-          name: data.user.name,
-          avatar: data.user.avatar || null,
-        }).then(res => {
-          if (res.code === '200') {
-            ElMessage.success('更新成功')
-            //把更新后的用户信息存储到缓存
-            data.user = res.data
-            setSession(res.data)
-            emit('updateUser')
-          } else {
-            ElMessage.error(res.msg)
-          }
-        })
-      }
+const save = async () => {
+  if (data.submitting) return
+  data.submitting = true
+  try {
+    const valid = await formRef.value.validate().catch(() => false)
+    if (!valid) return
+    if (!['admin', 'user'].includes(data.user.role)) {
+      ElMessage.error('当前账号角色无效，请重新登录')
+      return
     }
-  })
+    const res = await request.put('/accounts/' + data.user.id, {
+      name: data.user.name,
+      avatar: data.user.avatar || null,
+    }, {
+      skipErrorToast: true,
+    })
+    if (res.code === '200') {
+      ElMessage.success('更新成功')
+      data.user = res.data
+      setSession(res.data)
+      emit('updateUser')
+    } else {
+      ElMessage.error(res.msg || '个人资料保存失败')
+    }
+  } catch (error) {
+    await notifyRequestError(error, '个人资料保存失败，请重试')
+  } finally {
+    data.submitting = false
+  }
 }
 </script>
 

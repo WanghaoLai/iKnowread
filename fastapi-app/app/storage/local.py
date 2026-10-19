@@ -15,7 +15,6 @@ from app.storage.base import StorageBackend
 class LocalStorage(StorageBackend):
     def __init__(self):
         self._root = settings.upload_dir
-        self._root.mkdir(parents=True, exist_ok=True)
 
     def _path(self, key: str) -> Path:
         return self._root / self.safe_path(key)
@@ -25,18 +24,18 @@ class LocalStorage(StorageBackend):
         prefix = f"{self.safe_path(subdir)}/" if subdir else ""
         key = f"{prefix}{uuid.uuid4().hex[:12]}_{name}"
         destination = self._path(key)
-        destination.parent.mkdir(parents=True, exist_ok=True)
 
         def copy() -> None:
-            with destination.open("wb") as output:
-                shutil.copyfileobj(file, output)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                with destination.open("wb") as output:
+                    shutil.copyfileobj(file, output)
+            except Exception:
+                destination.unlink(missing_ok=True)
+                self._remove_empty_parents(destination.parent)
+                raise
 
-        try:
-            await asyncio.to_thread(copy)
-        except Exception:
-            destination.unlink(missing_ok=True)
-            self._remove_empty_parents(destination.parent)
-            raise
+        await asyncio.to_thread(copy)
         return key
 
     def open(self, key: str) -> BinaryIO:

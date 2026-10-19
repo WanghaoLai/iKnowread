@@ -6,13 +6,12 @@
           class="doc-upload"
           drag
           multiple
-          :action="uploadUrl"
           accept=".pdf,.docx"
-          :with-credentials="true"
           :show-file-list="false"
+          :http-request="uploadTask"
           :before-upload="beforeUpload"
           :on-success="onUploadSuccess"
-          :on-error="() => ElMessage.error('上传失败，请重试')"
+          :on-error="onUploadError"
       >
         <el-icon class="upload-icon"><UploadFilled /></el-icon>
         <div class="upload-text">将文档拖到此处，或<em>点击上传</em></div>
@@ -22,12 +21,12 @@
 
     <div class="card" style="margin-bottom: 5px;">
       <el-input v-model="data.name" style="width: 300px; margin-right: 10px" placeholder="请输入文件名查询" :prefix-icon="Search" @keyup.enter="load"></el-input>
-      <el-button type="primary" :icon="Search" @click="load">查询</el-button>
+      <el-button type="primary" :icon="Search" :loading="loading" @click="load">查询</el-button>
       <el-button type="info" :icon="Refresh" style="margin: 0 10px" @click="reset">重置</el-button>
     </div>
 
     <div class="card" style="margin-bottom: 5px">
-      <el-table :data="data.tableData" stripe>
+      <el-table v-loading="loading" :data="data.tableData" stripe>
         <el-table-column label="文件名" prop="name" min-width="220" show-overflow-tooltip>
           <template #default="scope">
             <div class="doc-name">
@@ -47,20 +46,36 @@
         <el-table-column label="上传时间" align="center" width="170">
           <template #default="scope">{{ formatTime(scope.row.created_at) }}</template>
         </el-table-column>
-        <el-table-column label="文字识别" align="center" width="130">
+        <el-table-column label="处理状态" min-width="250">
           <template #default="scope">
-            <el-tag v-if="scope.row.ext === 'pdf'" size="small" effect="plain" :type="ocrType(scope.row.ocr_status)">
-              {{ displayOcrLabel(scope.row) }}
-            </el-tag>
-            <span v-else class="not-applicable">—</span>
+            <div class="processing-stages">
+              <el-tag
+                  v-for="stage in scope.row.processing_stages"
+                  :key="stage.type"
+                  size="small"
+                  effect="plain"
+                  :type="processingType(stage.status)"
+                  :title="stage.error || `${stage.label}：${processingLabel(stage.status)}`"
+              >{{ stage.label }}：{{ processingLabel(stage.status, stage) }}</el-tag>
+            </div>
           </template>
         </el-table-column>
-        <el-table-column label="操作" align="center" width="330">
+        <el-table-column label="操作" align="center" width="230">
           <template #default="scope">
             <el-button type="primary" size="small" :icon="View" @click="handlePreview(scope.row)">预览</el-button>
-            <el-button type="primary" size="small" :icon="Download" @click="handleDownload(scope.row)">下载</el-button>
-            <el-button v-if="canRetryOcr(scope.row)" size="small" @click="retryOcr(scope.row)">重试识别</el-button>
-            <el-button type="danger" size="small" :icon="Delete" @click="handleDelete(scope.row.id)">删除</el-button>
+            <el-button
+                v-if="canRetryOcr(scope.row)"
+                size="small"
+                :loading="retryingOcrIds.has(scope.row.id)"
+                @click="retryOcr(scope.row)"
+            >重试识别</el-button>
+            <el-button
+                type="danger"
+                size="small"
+                :icon="Delete"
+                :loading="deletingDocumentIds.has(scope.row.id)"
+                @click="handleDelete(scope.row.id)"
+            >删除</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -79,18 +94,18 @@
 
 <script setup>
 import { onBeforeUnmount, reactive } from "vue";
-import request from "@/utils/request";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { Search, Refresh, Delete, Document, Download, UploadFilled, View } from "@element-plus/icons-vue";
+import { Search, Refresh, Delete, Document, UploadFilled, View } from "@element-plus/icons-vue";
 import { buildPreviewModel } from "@/utils/preview";
+import { listDocuments, recycleDocument, retryDocumentOcr, uploadDocument } from '@/api/documents'
 import DocumentReader from "@/components/DocumentReader.vue";
-import { formatSize, formatTime } from '@/utils/format'
+import { formatSize, formatTime, documentTagType as tagType } from '@/utils/format'
+import { notifyRequestError } from '@/utils/request'
+import { useListLoader } from '@/composables/useListLoader'
+import { useBusyRefresh } from '@/composables/useBusyRefresh'
 
 const ALLOWED_EXTS = ['pdf', 'docx']
 const MAX_SIZE = 50 * 1024 * 1024
-
-// 文档上传的接口地址
-const uploadUrl = import.meta.env.VITE_BASE_URL + '/document/upload'
 
 const data = reactive({
   tableData: [],
@@ -102,24 +117,30 @@ const data = reactive({
   previewModel: null,
 })
 
-let ocrRefreshTimer = null
+const retryingOcrIds = reactive(new Set())
+const deletingDocumentIds = reactive(new Set())
 
-const scheduleOcrRefresh = () => {
-  clearTimeout(ocrRefreshTimer)
-  if (data.tableData.some(row => ['pending', 'processing'].includes(row.ocr_status))) {
-    ocrRefreshTimer = setTimeout(load, 3000)
-  }
-}
+const { loading, load: loadList, invalidate } = useListLoader(
+  signal => listDocuments({
+    pageNum: data.pageNum,
+    pageSize: data.pageSize,
+    name: data.name,
+  }, { signal }),
+  {
+    cancellable: true,
+    onError: error => notifyRequestError(error, '文档列表加载失败，请重试'),
+  },
+)
+
+const { schedule: scheduleOcrRefresh, stop: stopOcrRefresh } = useBusyRefresh(load, () =>
+  data.tableData.some(row => (row.processing_stages || []).some(
+      stage => ['pending', 'processing'].includes(stage.status)
+  )))
 
 // 分页查询当前用户的文档列表
-const load = async () => {
-  const res = await request.get('/document/selectPage', {
-    params: {
-      pageNum: data.pageNum,
-      pageSize: data.pageSize,
-      name: data.name
-    }
-  })
+async function load() {
+  const res = await loadList()
+  if (!res) return
   data.tableData = res.data?.list || []
   data.total = res.data?.total || 0
   scheduleOcrRefresh()
@@ -139,6 +160,24 @@ const beforeUpload = (file) => {
   return true
 }
 
+// 多文件拖入时串行上传：避免并发触发服务端上传并发限制（429），
+// 也让每个失败的文件只弹一条具体错误提示。
+let uploadChain = Promise.resolve()
+const uploadTask = (option) => {
+  const run = async () => {
+    try {
+      option.onSuccess(await uploadDocument(option.file, {
+        skipErrorToast: true,
+        timeout: 300000,
+      }))
+    } catch (error) {
+      option.onError(error)
+    }
+  }
+  uploadChain = uploadChain.then(run, run)
+  return uploadChain
+}
+
 const onUploadSuccess = (res) => {
   if (res.code === '200') {
     ElMessage.success('上传成功')
@@ -147,6 +186,10 @@ const onUploadSuccess = (res) => {
   } else {
     ElMessage.error(res.msg)
   }
+}
+
+const onUploadError = (error) => {
+  ElMessage.error(error?.response?.data?.msg || '上传失败，请重试')
 }
 
 const handlePreview = (row) => {
@@ -159,28 +202,40 @@ const handlePreview = (row) => {
   data.previewVisible = true
 }
 
-const handleDownload = (row) => {
-  window.open(import.meta.env.VITE_BASE_URL + '/document/download/' + row.id)
-}
-
 const retryOcr = async (row) => {
-  const res = await request.post(`/document/${row.id}/ocr`)
-  Object.assign(row, res.data || {})
-  ElMessage.success('已重新加入文字识别队列')
-  scheduleOcrRefresh()
+  if (retryingOcrIds.has(row.id)) return
+  retryingOcrIds.add(row.id)
+  try {
+    const res = await retryDocumentOcr(row.id)
+    Object.assign(row, res.data || {})
+    ElMessage.success('已重新加入文字识别队列')
+    scheduleOcrRefresh()
+  } catch (error) {
+    notifyRequestError(error, '重新提交文字识别失败，请重试')
+  } finally {
+    retryingOcrIds.delete(row.id)
+  }
 }
 
-const handleDelete = (id) => {
-  ElMessageBox.confirm('删除后文件无法恢复，您确定删除吗?', '删除确认', { type: 'warning' }).then(() => {
-    request.delete('/document/delete/' + id).then(res => {
-      if (res.code === '200') {
-        load()
-        ElMessage.success('操作成功')
-      } else {
-        ElMessage.error(res.msg)
-      }
-    })
-  }).catch(() => {})
+const handleDelete = async (id) => {
+  if (deletingDocumentIds.has(id)) return
+  deletingDocumentIds.add(id)
+  try {
+    await ElMessageBox.confirm('删除后文档将移入回收站，可随时恢复或彻底删除，确定删除吗?', '删除确认', { type: 'warning' })
+    const res = await recycleDocument(id)
+    if (res.code === '200') {
+      ElMessage.success('操作成功')
+      await load()
+    } else {
+      ElMessage.error(res.msg || '文档删除失败')
+    }
+  } catch (error) {
+    if (error !== 'cancel' && error !== 'close') {
+      await notifyRequestError(error, '文档删除失败，请重试')
+    }
+  } finally {
+    deletingDocumentIds.delete(id)
+  }
 }
 
 const reset = () => {
@@ -189,19 +244,27 @@ const reset = () => {
   load()
 }
 
-const tagType = (ext) => ({ pdf: 'danger', docx: '' }[ext] ?? 'info')
-const ocrLabel = (status) => ({
-  pending: '等待识别',
-  processing: '识别中',
-  ready: '可选择文字',
-  failed: '识别失败',
-}[status] || '未处理')
-const displayOcrLabel = (row) => row.ocr_error === 'OCR 服务未启用' ? '未启用' : ocrLabel(row.ocr_status)
 const canRetryOcr = (row) => row.ext === 'pdf' && row.ocr_status === 'failed' && row.ocr_error !== 'OCR 服务未启用'
-const ocrType = (status) => ({ ready: 'success', failed: 'danger', processing: 'primary' }[status] || 'info')
+const processingLabel = (status, stage = {}) => {
+  if (stage.error === 'OCR 服务未启用') return '未启用'
+  return ({
+    not_applicable: '不适用',
+    not_started: '未开始',
+    pending: '等待中',
+    processing: '处理中',
+    ready: '已完成',
+    failed: '失败',
+  })[status] || '未知'
+}
+const processingType = status => ({
+  ready: 'success', failed: 'danger', processing: 'primary', pending: 'warning',
+})[status] || 'info'
 
 load()
-onBeforeUnmount(() => clearTimeout(ocrRefreshTimer))
+onBeforeUnmount(() => {
+  stopOcrRefresh()
+  invalidate()
+})
 </script>
 
 <style scoped>
@@ -245,5 +308,9 @@ onBeforeUnmount(() => clearTimeout(ocrRefreshTimer))
   margin-right: 6px;
   flex-shrink: 0;
 }
-.not-applicable { color: var(--ik-text-sub); }
+.processing-stages {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
 </style>

@@ -47,13 +47,15 @@ _password_slot_count: int | None = None
 
 
 def client_ip(request: Request) -> str:
-    # Uvicorn only trusts forwarded headers from the private Docker proxy; see Dockerfile.
+    # Uvicorn accepts forwarded headers only from Caddy's fixed address in compose.yaml.
     return request.client.host if request.client else "unknown"
 
 
 async def limit_auth(request: Request, action: str, subject: str = "") -> None:
     if action == "register":
         limit = settings.REGISTER_RATE_LIMIT
+    elif action == "password":
+        limit = settings.PASSWORD_CHANGE_RATE_LIMIT
     elif action == "captcha":
         limit = settings.CAPTCHA_RATE_LIMIT
     else:
@@ -63,8 +65,9 @@ async def limit_auth(request: Request, action: str, subject: str = "") -> None:
     )
     if subject:
         subject_hash = hashlib.sha256(subject.strip().lower()[:255].encode()).hexdigest()[:24]
+        subject_limit = limit if action == "password" else limit * 2
         await limiter.check(
-            f"{action}:account:{subject_hash}", limit * 2, settings.AUTH_RATE_WINDOW_SECONDS
+            f"{action}:account:{subject_hash}", subject_limit, settings.AUTH_RATE_WINDOW_SECONDS
         )
 
 

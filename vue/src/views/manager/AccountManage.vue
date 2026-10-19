@@ -3,7 +3,7 @@
 
     <div class="card" style="margin-bottom: 5px;">
       <el-input v-model="data.name" style="width: 300px; margin-right: 10px" placeholder="请输入名称查询" :prefix-icon="Search"></el-input>
-      <el-button type="primary" :icon="Search" @click="load">查询</el-button>
+      <el-button type="primary" :icon="Search" :loading="loading" @click="load">查询</el-button>
       <el-button type="info" :icon="Refresh" style="margin: 0 10px" @click="reset">重置</el-button>
     </div>
 
@@ -11,7 +11,7 @@
       <div style="margin-bottom: 10px">
         <el-button type="primary" :icon="Plus" @click="handleAdd">新增</el-button>
       </div>
-      <el-table :data="data.tableData" stripe>
+      <el-table v-loading="loading" :data="data.tableData" stripe>
         <el-table-column label="用户名" prop="username"></el-table-column>
         <el-table-column label="名称" prop="name"></el-table-column>
         <el-table-column label="头像">
@@ -44,18 +44,24 @@
           <el-input v-model="data.form.name" autocomplete="off" />
         </el-form-item>
         <el-form-item v-if="!data.form.id" label="初始密码" prop="password">
-          <el-input v-model="data.form.password" show-password autocomplete="new-password" />
+          <el-input v-model="data.form.password" type="password" show-password autocomplete="new-password" />
         </el-form-item>
         <el-form-item label="头像" prop="avatar">
-          <el-upload :action="uploadUrl" list-type="picture" :data="uploadData" :on-success="handleImgSuccess">
+          <el-upload
+              list-type="picture"
+              :data="uploadData"
+              :http-request="uploadAvatar"
+              :on-success="avatarHandlers.onSuccess"
+              :on-error="avatarHandlers.onError"
+          >
             <el-button type="primary" :icon="Upload">上传图片</el-button>
           </el-upload>
         </el-form-item>
       </el-form>
       <template #footer>
       <span class="dialog-footer">
-        <el-button @click="data.formVisible = false">取 消</el-button>
-        <el-button type="primary" :icon="Check" @click="save">保 存</el-button>
+        <el-button :disabled="data.submitting" @click="data.formVisible = false">取 消</el-button>
+        <el-button type="primary" :icon="Check" :loading="data.submitting" @click="save">保 存</el-button>
       </span>
       </template>
     </el-dialog>
@@ -65,19 +71,19 @@
 
 <script setup>
 // 用户/管理员共用同一个账号资源，仅角色筛选条件不同。
-import request from "@/utils/request";
-import { fileUrl } from "@/utils/file";
+import request, { notifyRequestError } from "@/utils/request";
+import { uploadAvatar } from "@/api/files";
+import { fileUrl, avatarUploadHandlers } from "@/utils/file";
 import { Search, Refresh, Plus, Edit, Delete, Upload, Check } from "@element-plus/icons-vue";
 import { reactive, ref, computed, watch } from "vue";
 import { ElMessageBox, ElMessage } from "element-plus";
+import { useListLoader } from '@/composables/useListLoader'
 
 const props = defineProps({
   role: { type: String, required: true },
   title: { type: String, required: true },      // 编辑弹窗标题
 })
 
-// 文件上传的接口地址
-const uploadUrl = import.meta.env.VITE_BASE_URL + '/files/upload'
 // 编辑已有账号时头像直接入该账号目录；新建（无 id）先暂存 temp，由后端 add 归档
 const uploadData = computed(() => data.form.id
     ? { account_id: data.form.id, role: props.role }
@@ -92,6 +98,7 @@ const data = reactive({
   form: {},
   tableData: [],
   name: null,
+  submitting: false,
   rules: {
     username: [
       { required: true, message: '请输入账号', trigger: 'blur' }
@@ -109,18 +116,24 @@ const data = reactive({
 })
 
 // 分页查询
-const load = () => {
-  request.get('/accounts', {
+const { loading, load: loadList } = useListLoader(
+  () => request.get('/accounts', {
+    skipErrorToast: true,
     params: {
       role: props.role,
       pageNum: data.pageNum,
       pageSize: data.pageSize,
-      name: data.name
-    }
-  }).then(res => {
-    data.tableData = res.data?.list
-    data.total = res.data?.total
-  })
+      name: data.name,
+    },
+  }),
+  { onError: error => notifyRequestError(error, '账号列表加载失败，请重试') },
+)
+
+async function load() {
+  const res = await loadList()
+  if (!res) return
+  data.tableData = res.data?.list
+  data.total = res.data?.total
 }
 
 // 新增
@@ -136,59 +149,63 @@ const handleEdit = (row) => {
 }
 
 // 新增保存
-const add = () => {
-  request.post('/accounts', { ...data.form, role: props.role }).then(res => {
-    if (res.code === '200') {
-      load()
-      ElMessage.success('操作成功')
-      data.formVisible = false
-    } else {
-      ElMessage.error(res.msg)
-    }
+const add = async () => {
+  return request.post('/accounts', { ...data.form, role: props.role }, {
+    skipErrorToast: true,
   })
 }
 
 // 编辑保存
-const update = () => {
-  request.put('/accounts/' + data.form.id, {
+const update = async () => {
+  return request.put('/accounts/' + data.form.id, {
     name: data.form.name,
     avatar: data.form.avatar || null,
-  }).then(res => {
-    if (res.code === '200') {
-      load()
-      ElMessage.success('操作成功')
-      data.formVisible = false
-    } else {
-      ElMessage.error(res.msg)
-    }
+  }, {
+    skipErrorToast: true,
   })
 }
 
 // 弹窗保存
-const save = () => {
-  formRef.value.validate(valid => {
-    if (valid) {
-      // data.form有id就是更新，没有就是新增
-      data.form.id ? update() : add()
+const save = async () => {
+  if (data.submitting) return
+  data.submitting = true
+  try {
+    const valid = await formRef.value.validate().catch(() => false)
+    if (!valid) return
+    const res = await (data.form.id ? update() : add())
+    if (res.code === '200') {
+      data.formVisible = false
+      ElMessage.success('操作成功')
+      await load()
+    } else {
+      ElMessage.error(res.msg || '账号保存失败')
     }
-  })
+  } catch (error) {
+    await notifyRequestError(error, '账号保存失败，请重试')
+  } finally {
+    data.submitting = false
+  }
 }
 
 // 删除
-const handleDelete = (id) => {
-  ElMessageBox.confirm('删除后数据无法恢复，您确定删除吗?', '删除确认', { type: 'warning' }).then(res => {
-    request.delete('/accounts/' + id).then(res => {
-      if (res.code === '200') {
-        load()
-        ElMessage.success('操作成功')
-      } else {
-        ElMessage.error(res.msg)
-      }
-    })
-  }).catch(err => {
-    // 用户主动取消属正常流程，其余异常要有迹可查
-    if (err !== 'cancel' && err !== 'close') console.error('删除确认异常:', err)
-  })
+const handleDelete = async (id) => {
+  try {
+    await ElMessageBox.confirm('删除后数据无法恢复，您确定删除吗?', '删除确认', { type: 'warning' })
+  } catch (reason) {
+    if (reason !== 'cancel' && reason !== 'close') console.error('删除确认异常:', reason)
+    return
+  }
+  try {
+    const res = await request.delete('/accounts/' + id, { skipErrorToast: true })
+    if (res.code === '200') {
+      ElMessage.success('操作成功')
+      await load()
+    } else {
+      ElMessage.error(res.msg || '账号删除失败')
+    }
+  } catch (error) {
+    await notifyRequestError(error, '账号删除失败，请重试')
+  }
 }
 
 // 重置
@@ -197,10 +214,8 @@ const reset = () => {
   load()
 }
 
-// 处理文件上传的钩子
-const handleImgSuccess = (res) => {
-  data.form.avatar = res.data  // res.data就是文件上传返回的文件路径，获取到路径后赋值表单的属性
-}
+// 头像上传回调：成功把返回的相对路径写入表单，失败统一提示
+const avatarHandlers = avatarUploadHandlers(path => { data.form.avatar = path })
 
 // 两条路由复用同一组件实例，切换 用户信息/管理员信息 时按 role 重新加载
 watch(() => props.role, () => {

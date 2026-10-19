@@ -2,7 +2,10 @@
 .DS_Store
 **/.DS_Store
 **/__pycache__/
+**/.pytest_cache/
 *.py[cod]
+.coverage
+coverage/
 
 fastapi-app/.env
 fastapi-app/data/files/

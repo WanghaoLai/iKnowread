@@ -25,6 +25,12 @@ def _global() -> asyncio.Semaphore:
     return _global_slots
 
 
+def prune_account_slots(active_account_ids: set[int]) -> None:
+    """回收已删除账号的信号量映射；在途请求仍持有原对象引用，不受影响。"""
+    for account_id in [key for key in _account_slots if key not in active_account_ids]:
+        del _account_slots[account_id]
+
+
 @asynccontextmanager
 async def ai_request_slot(account_id: int):
     global_slot = _global()
@@ -32,20 +38,20 @@ async def ai_request_slot(account_id: int):
     acquired_global = False
     acquired_account = False
     try:
-        async with asyncio.timeout(max(0.05, settings.AI_QUEUE_WAIT_SECONDS)):
-            await account_slot.acquire()
-            acquired_account = True
-            # 同一账号的排队请求先等账号槽位，不应占住全局槽位
-            # 并把其他账号挤出服务。
-            await global_slot.acquire()
-            acquired_global = True
-    except TimeoutError:
-        raise HTTPException(
-            status_code=429,
-            detail="当前 AI 请求较多，请稍后重试",
-            headers={"Retry-After": "2"},
-        ) from None
-    try:
+        try:
+            async with asyncio.timeout(max(0.05, settings.AI_QUEUE_WAIT_SECONDS)):
+                await account_slot.acquire()
+                acquired_account = True
+                # 同一账号的排队请求先等账号槽位，不应占住全局槽位
+                # 并把其他账号挤出服务。
+                await global_slot.acquire()
+                acquired_global = True
+        except TimeoutError:
+            raise HTTPException(
+                status_code=429,
+                detail="当前 AI 请求较多，请稍后重试",
+                headers={"Retry-After": "2"},
+            ) from None
         yield
     finally:
         if acquired_global:

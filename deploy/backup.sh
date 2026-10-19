@@ -32,7 +32,11 @@ backend_stopped=true
 docker compose exec -T db sh -c \
   'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysqldump -uroot --single-transaction --no-tablespaces --set-gtid-purged=OFF --databases "$MYSQL_DATABASE"' \
   | gzip > "$backup_dir/database.sql.gz"
-tar -czf "$backup_dir/app-data.tar.gz" -C runtime app-data
+# Read the Docker-managed volume through the production image. The name inside
+# the archive remains app-data/ so existing restore procedures stay compatible.
+docker compose run --rm --no-deps -T --entrypoint python backend -c \
+  'import sys, tarfile; archive = tarfile.open(fileobj=sys.stdout.buffer, mode="w|gz"); archive.add("/app/data", arcname="app-data"); archive.close()' \
+  > "$backup_dir/app-data.tar.gz"
 tar -czf "$backup_dir/deployment.tar.gz" .env compose.yaml deploy .dockerignore
 # Save matching source; frontend dependencies and build output are intentionally excluded.
 tar --exclude='*/node_modules' --exclude='*/dist' --exclude='*/__pycache__' \
@@ -54,6 +58,10 @@ for _attempt in $(seq 1 45); do
 done
 if [[ "$backend_stopped" == true ]]; then
   echo "备份文件已生成，但后端未在 90 秒内恢复健康；未标记为完整备份。" >&2
+  exit 1
+fi
+if ! bash deploy/verify-backup.sh "$backup_dir"; then
+  echo "备份归档已生成，但隔离恢复验证失败；未标记为完整备份。" >&2
   exit 1
 fi
 touch "$backup_dir/COMPLETE"
