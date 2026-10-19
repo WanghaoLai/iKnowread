@@ -12,18 +12,25 @@ import os
 import zipfile
 
 import httpx
-import pypdfium2
-
-from captcha_solver import solve_response
-
 
 PDF_NAME = "docker-smoke-check.pdf"
 DOCX_NAME = "docker-smoke-check.docx"
 NOTE_TITLE = "Docker smoke persistence check"
+HIGHLIGHT_TEXT = "Docker highlight persistence check"
 SESSION_COOKIE = "iknowread_session"
 
 
+def api_document_path(name: str, document_id: int | None = None) -> str:
+    if __package__:
+        from .document_contract import document_path
+    else:
+        from document_contract import document_path
+    return document_path(name, document_id, prefix="/api")
+
+
 def one_page_pdf() -> bytes:
+    import pypdfium2
+
     output = io.BytesIO()
     document = pypdfium2.PdfDocument.new()
     try:
@@ -74,7 +81,17 @@ def expect(response: httpx.Response, status: int) -> dict:
     return {}
 
 
-def login(client: httpx.Client, username: str, password: str) -> None:
+def login(
+    client: httpx.Client,
+    username: str,
+    password: str,
+    role: str = "admin",
+) -> None:
+    if __package__:
+        from .captcha_solver import solve_response
+    else:
+        from captcha_solver import solve_response
+
     for _ in range(8):
         captcha_id, captcha_code = solve_response(
             expect(client.get("/api/captcha"), 200)
@@ -82,7 +99,7 @@ def login(client: httpx.Client, username: str, password: str) -> None:
         response = client.post(
             "/api/login",
             json={
-                "username": username, "password": password, "role": "admin",
+                "username": username, "password": password, "role": role,
                 "captcha_id": captcha_id, "captcha_code": captcha_code,
             },
         )
@@ -129,13 +146,60 @@ def check_logout_revocation(client: httpx.Client) -> None:
     expect(replay, 401)
 
 
+def check_role_isolation(client: httpx.Client, admin_username: str, admin_password: str) -> None:
+    username = "docker-smoke-user"
+    password = "docker-smoke-password"
+    accounts = expect(
+        client.get("/api/accounts", params={"role": "user", "pageSize": 100}),
+        200,
+    )["data"]["list"]
+    for account in accounts:
+        if account["username"] == username:
+            expect(client.delete(f"/api/accounts/{account['id']}"), 200)
+    created = expect(client.post("/api/accounts", json={
+        "username": username,
+        "password": password,
+        "name": "Docker smoke user",
+        "role": "user",
+    }), 200)["data"]
+    assert "password" not in created
+
+    expect(client.post("/api/logout"), 200)
+    login(client, username, password, "user")
+    expect(client.get("/api/accounts", params={"role": "user"}), 403)
+    expect(client.get("/api/files/download/admin/1/private.png"), 403)
+    invalid_role_update = client.put(
+        f"/api/accounts/{created['id']}",
+        json={"name": "Docker smoke user", "role": "admin"},
+    )
+    expect(invalid_role_update, 422)
+    expect(client.post("/api/logout"), 200)
+
+    login(client, admin_username, admin_password)
+    accounts = expect(
+        client.get("/api/accounts", params={"role": "user", "pageSize": 100}),
+        200,
+    )
+    assert "password" not in str(accounts).lower()
+    expect(client.delete(f"/api/accounts/{created['id']}"), 200)
+
+
 def cleanup_named_data(client: httpx.Client) -> None:
     documents = expect(
-        client.get("/api/document/selectPage", params={"name": "docker-smoke-check", "pageSize": 100}),
+        client.get(api_document_path("list"), params={"name": "docker-smoke-check", "pageSize": 100}),
         200,
     )["data"]["list"]
     for document in documents:
-        expect(client.delete(f"/api/document/delete/{document['id']}"), 200)
+        expect(client.delete(api_document_path("delete", document["id"])), 200)
+    recycled = expect(
+        client.get(
+            api_document_path("recycle_list"),
+            params={"name": "docker-smoke-check", "pageSize": 100},
+        ),
+        200,
+    )["data"]["list"]
+    for document in recycled:
+        expect(client.delete(api_document_path("purge", document["id"])), 200)
     notes = expect(
         client.get("/api/notes", params={"keyword": NOTE_TITLE, "pageSize": 100}), 200
     )["data"]["list"]
@@ -144,8 +208,9 @@ def cleanup_named_data(client: httpx.Client) -> None:
             expect(client.delete(f"/api/notes/{note['id']}"), 200)
 
 
-def seed(client: httpx.Client) -> None:
+def seed(client: httpx.Client, admin_username: str, admin_password: str) -> None:
     cleanup_named_data(client)
+    check_role_isolation(client, admin_username, admin_password)
     expect(
         client.post(
             "/api/register",
@@ -155,22 +220,23 @@ def seed(client: httpx.Client) -> None:
     )
     expect(
         client.post(
-            "/api/document/upload",
+            api_document_path("upload"),
             files={"file": ("fake.pdf", b"not a pdf", "application/pdf")},
         ),
         400,
     )
     pdf = expect(
         client.post(
-            "/api/document/upload",
+            api_document_path("upload"),
             files={"file": (PDF_NAME, one_page_pdf(), "application/pdf")},
         ),
         200,
     )["data"]
     assert pdf["ocr_status"] == "failed" and pdf["ocr_error"] == "OCR 服务未启用"
+    assert len(pdf["content_version"]) == 32
     docx = expect(
         client.post(
-            "/api/document/upload",
+            api_document_path("upload"),
             files={
                 "file": (
                     DOCX_NAME,
@@ -182,6 +248,7 @@ def seed(client: httpx.Client) -> None:
         200,
     )["data"]
     assert docx["ext"] == "docx"
+    assert len(docx["content_version"]) == 32
     expect(
         client.post(
             "/api/notes",
@@ -193,26 +260,55 @@ def seed(client: httpx.Client) -> None:
         ),
         200,
     )
+    expect(
+        client.post(
+            "/api/highlights",
+            json={
+                "document_id": pdf["id"],
+                "source_anchor": {
+                    "protocol": "iknowread.source-anchor/v1",
+                    "document_id": pdf["id"],
+                    "document_version": pdf["content_version"],
+                    "source_format": "pdf",
+                    "scope": "page",
+                    "page": 1,
+                    "progression": 0,
+                    "selector": {
+                        "position": {"start": 0, "end": len(HIGHLIGHT_TEXT)},
+                        "quote": {"exact": HIGHLIGHT_TEXT, "prefix": "", "suffix": ""},
+                    },
+                },
+                "selected_text": HIGHLIGHT_TEXT,
+                "remark": "This highlight must survive a backend restart.",
+            },
+        ),
+        200,
+    )
     check_logout_revocation(client)
     print("docker-smoke seed: PASS")
 
 
 def verify(client: httpx.Client) -> None:
     documents = expect(
-        client.get("/api/document/selectPage", params={"name": "docker-smoke-check", "pageSize": 100}),
+        client.get(api_document_path("list"), params={"name": "docker-smoke-check", "pageSize": 100}),
         200,
     )["data"]["list"]
     by_name = {document["name"]: document for document in documents}
     assert {PDF_NAME, DOCX_NAME}.issubset(by_name), "documents did not survive restart"
     pdf = by_name[PDF_NAME]
     ranged = client.get(
-        f"/api/document/preview/{pdf['id']}", headers={"Range": "bytes=0-31"}
+        api_document_path("preview", pdf["id"]),
+        params={"version": pdf["content_version"]},
+        headers={"Range": "bytes=0-31"},
     )
     expect(ranged, 206)
     assert ranged.headers.get("content-range", "").startswith("bytes 0-31/")
     assert ranged.content.startswith(b"%PDF-")
     docx = by_name[DOCX_NAME]
-    downloaded = client.get(f"/api/document/download/{docx['id']}")
+    downloaded = client.get(
+        api_document_path("download", docx["id"]),
+        params={"version": docx["content_version"]},
+    )
     expect(downloaded, 200)
     assert downloaded.content.startswith(b"PK")
 
@@ -220,6 +316,51 @@ def verify(client: httpx.Client) -> None:
         client.get("/api/notes", params={"keyword": NOTE_TITLE, "pageSize": 100}), 200
     )["data"]["list"]
     assert any(note["title"] == NOTE_TITLE for note in notes), "note did not survive restart"
+    highlights = expect(
+        client.get(
+            "/api/highlights",
+            params={"documentId": pdf["id"], "documentVersion": pdf["content_version"]},
+        ),
+        200,
+    )["data"]
+    assert any(
+        item["selected_text"] == HIGHLIGHT_TEXT for item in highlights
+    ), "highlight did not survive restart"
+    highlight = next(item for item in highlights if item["selected_text"] == HIGHLIGHT_TEXT)
+
+    # 验证软删除与恢复跨过完整 API 链路，且版本、高亮和备注不变。
+    expect(client.delete(api_document_path("delete", pdf["id"])), 200)
+    expect(client.get(api_document_path("preview", pdf["id"])), 404)
+    expect(
+        client.get(
+            "/api/highlights",
+            params={"documentId": pdf["id"], "documentVersion": pdf["content_version"]},
+        ),
+        404,
+    )
+    recycled = expect(
+        client.get(
+            api_document_path("recycle_list"),
+            params={"name": PDF_NAME, "pageSize": 100},
+        ),
+        200,
+    )["data"]["list"]
+    assert any(item["id"] == pdf["id"] for item in recycled), "document did not enter recycle bin"
+    restored = expect(client.post(api_document_path("restore", pdf["id"])), 200)["data"]
+    assert restored["content_version"] == pdf["content_version"], "restore changed content version"
+    restored_highlights = expect(
+        client.get(
+            "/api/highlights",
+            params={"documentId": pdf["id"], "documentVersion": pdf["content_version"]},
+        ),
+        200,
+    )["data"]
+    restored_highlight = next(
+        item for item in restored_highlights if item["selected_text"] == HIGHLIGHT_TEXT
+    )
+    assert restored_highlight["id"] == highlight["id"], "restore replaced highlight identity"
+    assert restored_highlight["remark"] == highlight["remark"], "restore lost highlight remark"
+    expect(client.get(api_document_path("preview", pdf["id"])), 200)
     cleanup_named_data(client)
     print("docker-smoke verify: PASS")
 
@@ -245,7 +386,10 @@ def main() -> None:
     ) as client:
         check_gateway(client)
         login(client, username, password)
-        (seed if args.phase == "seed" else verify)(client)
+        if args.phase == "seed":
+            seed(client, username, password)
+        else:
+            verify(client)
 
 
 if __name__ == "__main__":

@@ -42,6 +42,25 @@ services:
     networks:
       - data
 
+  app-data-init:
+    image: iknowread-backend:${APP_TAG:-local}
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.backend
+    restart: "no"
+    command: ["python", "/app/scripts/init_app_data.py"]
+    volumes:
+      - app_data:/app/data
+      - ./:/legacy-source:ro
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    network_mode: none
+
   backend:
     image: iknowread-backend:${APP_TAG:-local}
     build:
@@ -52,10 +71,16 @@ services:
     environment:
       DEBUG: "false"
       AUTH_SECRET: ${AUTH_SECRET:?Run deploy/init-env.py first}
+      # Only the fixed Caddy address may supply X-Forwarded-* to Uvicorn.
+      FORWARDED_ALLOW_IPS: "172.30.30.10"
       DEFAULT_ADMIN_USERNAME: admin
       DEFAULT_ADMIN_PASSWORD: ""
       ALLOW_REGISTRATION: ${ALLOW_REGISTRATION:-false}
+      AUTH_RATE_WINDOW_SECONDS: "60"
       LOGIN_RATE_LIMIT: "10"
+      PASSWORD_CHANGE_RATE_LIMIT: "5"
+      CAPTCHA_RATE_LIMIT: "30"
+      CAPTCHA_TTL_SECONDS: "120"
       REGISTER_RATE_LIMIT: "3"
       PASSWORD_WORKERS: "2"
       PASSWORD_QUEUE_WAIT_SECONDS: "1"
@@ -70,10 +95,18 @@ services:
       UPLOAD_DIR: /app/data/files
       USER_STORAGE_QUOTA_BYTES: ${USER_STORAGE_QUOTA_BYTES:-2147483648}
       USER_DOCUMENT_LIMIT: ${USER_DOCUMENT_LIMIT:-200}
+      USER_TOTAL_DOCUMENT_LIMIT: ${USER_TOTAL_DOCUMENT_LIMIT:-400}
+      USER_NOTE_LIMIT: ${USER_NOTE_LIMIT:-10000}
+      USER_HIGHLIGHT_LIMIT: ${USER_HIGHLIGHT_LIMIT:-10000}
+      DOCUMENT_HIGHLIGHT_LIMIT: ${DOCUMENT_HIGHLIGHT_LIMIT:-1000}
       STORAGE_MIN_FREE_BYTES: ${STORAGE_MIN_FREE_BYTES:-2147483648}
       UPLOAD_CONCURRENCY: "3"
       UPLOAD_QUEUE_WAIT_SECONDS: "1"
-      OCR_ENABLED: ${OCR_ENABLED:-false}
+      DOCX_MAX_ENTRIES: "2000"
+      DOCX_MAX_UNCOMPRESSED_BYTES: "209715200"
+      PDF_MAX_PAGES: "1000"
+      OCR_ENABLED: ${OCR_ENABLED:-true}
+      OCR_LANGUAGES: "chi_sim+eng"
       OCR_WORKERS: "1"
       OCR_JOBS_PER_DOCUMENT: "1"
       OCR_MAX_IMAGE_MPIXELS: "20"
@@ -83,9 +116,13 @@ services:
       AI_ACCOUNT_CONCURRENCY: "1"
       AI_QUEUE_WAIT_SECONDS: "1"
       AI_MAX_RESPONSE_BYTES: "2097152"
+      NOTE_EXPORT_MAX_ITEMS: "5000"
+      NOTE_EXPORT_MAX_BYTES: "20971520"
     volumes:
-      - ./runtime/app-data:/app/data
+      - app_data:/app/data
     depends_on:
+      app-data-init:
+        condition: service_completed_successfully
       db:
         condition: service_healthy
     healthcheck:
@@ -107,8 +144,8 @@ services:
     cap_drop:
       - ALL
     networks:
-      - proxy
-      - data
+      proxy:
+      data:
 
   web:
     image: iknowread-web:${APP_TAG:-local}
@@ -141,14 +178,19 @@ services:
     sysctls:
       net.ipv4.ip_unprivileged_port_start: "0"
     networks:
-      - proxy
+      proxy:
+        ipv4_address: 172.30.30.10
 
 volumes:
   mysql_data:
+  app_data:
   caddy_data:
   caddy_config:
 
 networks:
   proxy:
+    ipam:
+      config:
+        - subnet: 172.30.30.0/24
   data:
     internal: true

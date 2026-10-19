@@ -84,7 +84,7 @@ import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { Connection, Plus } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import request from '@/utils/request'
+import request, { notifyRequestError } from '@/utils/request'
 
 const DEFAULT_PROMPT = '你是 iKnowread 智能助手，请用清晰、准确的中文回答用户的问题。'
 const router = useRouter()
@@ -219,6 +219,8 @@ async function discoverModels(configId, notify = false) {
       if (data.source === 'provider') ElMessage.success(data.message)
       else ElMessage.info(data.message)
     }
+  } catch (error) {
+    notifyRequestError(error, '模型列表获取失败，请重试')
   } finally { discovering.value = false }
 }
 function handleModelDropdown(visible) {
@@ -245,6 +247,7 @@ async function save(withTest) {
       testResult.value = { success: true, message: result.data.message }
     }
   } catch (error) {
+    notifyRequestError(error, '配置保存失败，请重试')
     if (withTest) testResult.value = { success: false, message: error.response?.data?.msg || '保存或连接测试失败' }
   } finally { saving.value = false; testing.value = false }
 }
@@ -252,6 +255,7 @@ async function activate(item) {
   if (!item || activatingId.value !== null) return
   activatingId.value = item.id
   try { await request.post(`/ai/configs/${item.id}/activate`); ElMessage.success(`已切换为「${item.name}」`); await load(item.id) }
+  catch (error) { notifyRequestError(error, '配置激活失败，请重试') }
   finally { activatingId.value = null }
 }
 async function remove() {
@@ -261,6 +265,7 @@ async function remove() {
   } catch (_) { return }
   deleting.value = true
   try { await request.delete(`/ai/configs/${selectedId.value}`); ElMessage.success('配置已删除'); await load() }
+  catch (error) { notifyRequestError(error, '配置删除失败，请重试') }
   finally { deleting.value = false }
 }
 

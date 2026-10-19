@@ -71,12 +71,14 @@ async def register(account: RegisterRequest, request: Request):
 
 
 # 修改密码
-@router.put("/updatePassword")
+@router.put("/password")
 async def update_password(
     account: PasswordUpdateRequest,
     response: Response,
+    request: Request,
     current: CurrentAccount = Depends(get_current_account),
 ):
+    await limit_auth(request, "password", str(current.id))
     await auth_service.update_password(
         current.id, account.password, account.newPassword
     )

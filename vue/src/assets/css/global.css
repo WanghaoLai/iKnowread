@@ -33,6 +33,14 @@ body {
   background-color: var(--ik-bg);
 }
 
+/* 在线阅读期间禁止浏览器和系统主内容区产生第二条纵向滚动条。 */
+html.iknowread-reader-open,
+body.iknowread-reader-open {
+  height: 100%;
+  overflow: hidden !important;
+  overscroll-behavior: none;
+}
+
 a {
   color: var(--ik-blue);
   text-decoration: none;

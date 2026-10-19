@@ -1,3 +1,5 @@
+import hashlib
+from pathlib import Path
 import warnings
 
 from tortoise.transactions import in_transaction
@@ -10,6 +12,13 @@ from app.migrations import (
     v005_multi_ai_config,
     v006_notes,
     v007_session_revocation,
+    v008_document_content_version,
+    v009_source_anchor,
+    v010_persistent_highlights,
+    v011_recycle_bin,
+    v012_normalize_usernames,
+    v013_document_processing_tasks,
+    v014_remove_placeholder_processing_tasks,
 )
 
 MIGRATIONS = (
@@ -20,7 +29,18 @@ MIGRATIONS = (
     v005_multi_ai_config,
     v006_notes,
     v007_session_revocation,
+    v008_document_content_version,
+    v009_source_anchor,
+    v010_persistent_highlights,
+    v011_recycle_bin,
+    v012_normalize_usernames,
+    v013_document_processing_tasks,
+    v014_remove_placeholder_processing_tasks,
 )
+
+
+def migration_checksum(migration) -> str:
+    return hashlib.sha256(Path(migration.__file__).read_bytes()).hexdigest()
 
 
 async def run_migrations() -> None:
@@ -42,25 +62,50 @@ async def run_migrations() -> None:
                         CREATE TABLE IF NOT EXISTS `schema_migration` (
                           `version` INT NOT NULL PRIMARY KEY,
                           `name` VARCHAR(255) NOT NULL,
+                          `checksum` CHAR(64) NULL,
                           `applied_at` DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
                         ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
                         """
                     )
-                applied_rows = await connection.execute_query_dict(
-                    "SELECT version FROM `schema_migration`"
+                checksum_column = await connection.execute_query_dict(
+                    "SELECT 1 FROM information_schema.COLUMNS "
+                    "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='schema_migration' "
+                    "AND COLUMN_NAME='checksum'"
                 )
-                applied = {int(row["version"]) for row in applied_rows}
+                if not checksum_column:
+                    await connection.execute_query(
+                        "ALTER TABLE `schema_migration` ADD COLUMN `checksum` CHAR(64) NULL "
+                        "AFTER `name`"
+                    )
+                applied_rows = await connection.execute_query_dict(
+                    "SELECT version, name, checksum FROM `schema_migration`"
+                )
+                applied = {int(row["version"]): row for row in applied_rows}
                 for migration in MIGRATIONS:
+                    checksum = migration_checksum(migration)
                     if migration.VERSION in applied:
+                        recorded = applied[migration.VERSION].get("checksum")
+                        if recorded and recorded != checksum:
+                            raise RuntimeError(
+                                f"迁移文件 v{migration.VERSION:03d} 已在应用后被修改，拒绝启动"
+                            )
+                        if not recorded:
+                            # Existing installations predate checksums. Adopt the
+                            # currently deployed files once, then enforce immutability.
+                            await connection.execute_query(
+                                "UPDATE `schema_migration` SET `checksum`=%s WHERE `version`=%s",
+                                [checksum, migration.VERSION],
+                            )
                         continue
                     await migration.upgrade(connection)
                     await connection.execute_query(
-                        "INSERT INTO `schema_migration` (version, name) VALUES (%s, %s)",
-                        [migration.VERSION, migration.NAME],
+                        "INSERT INTO `schema_migration` (version, name, checksum) "
+                        "VALUES (%s, %s, %s)",
+                        [migration.VERSION, migration.NAME, checksum],
                     )
             except BaseException:
-                # 在释放命名锁前先回滚最后一个未提交事务，避免下一实例
-                # 拿到锁却读到本实例的中间状态。
+                # MySQL DDL can commit implicitly. Each migration must remain
+                # restart-safe; rollback still protects transactional DML/version rows.
                 await connection.rollback()
                 raise
             else:

@@ -3,6 +3,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 
 from app.services.ai_providers import get_provider, validate_base_url
+from app.schemas.source_anchor import SourceAnchor, normalize_selected_text
 
 
 ProviderId = Literal["deepseek", "glm", "mimo", "bailian"]
@@ -70,5 +71,13 @@ class ChatRequest(BaseModel):
 class ExplainRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
+    source_anchor: SourceAnchor
     content: str = Field(min_length=1, max_length=4000)
-    document_title: str = Field(default="", max_length=255)
+
+    @model_validator(mode="after")
+    def require_text_selector(self):
+        if not self.source_anchor.selector:
+            raise ValueError("AI 解释必须包含原文文本定位")
+        if normalize_selected_text(self.source_anchor.selector.quote.exact) != self.content:
+            raise ValueError("待解释文字与原文定位不一致")
+        return self

@@ -20,6 +20,7 @@
           <el-input
               ref="passwordInputRef"
               v-model="data.form.password"
+              type="password"
               :prefix-icon="Lock"
               size="large"
               placeholder="请输入密码"

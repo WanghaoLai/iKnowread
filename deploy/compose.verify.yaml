@@ -8,8 +8,6 @@ services:
   backend:
     environment:
       DEFAULT_ADMIN_PASSWORD: ${VERIFY_ADMIN_PASSWORD:?Set a disposable verification password}
-    volumes: !override
-      - verify_app_data:/app/data
     ports: !override
       - "127.0.0.1:19090:9090"
 
@@ -17,6 +15,3 @@ services:
     ports: !override
       - "127.0.0.1:18080:80"
       - "127.0.0.1:18443:443"
-
-volumes:
-  verify_app_data:

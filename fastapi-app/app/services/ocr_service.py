@@ -15,14 +15,41 @@ from app.common.exception_handler import CustomException
 from app.config import settings
 from app.models import Document
 from app.services.account_service import RELATIVE_PREFIX
-from app.storage import get_storage
+from app.storage import get_storage, run_storage_io
 from app.services.resource_limits import account_lock, ensure_additional_storage
+from app.services import processing_task_service
 
 logger = logging.getLogger(__name__)
 
 _queue: asyncio.Queue[int] | None = None
 _workers: list[asyncio.Task] = []
 _queued_ids: set[int] = set()
+_availability_error: str | None = "OCR 服务尚未启动"
+
+
+async def _record_status(
+    document_id: int, status: str, error: str | None = None
+) -> None:
+    """Mirror OCR into the unified task table without risking OCR delivery."""
+    try:
+        await processing_task_service.set_status(
+            document_id, processing_task_service.OCR, status, error=error
+        )
+    except Exception:
+        # The legacy document fields remain authoritative and are overlaid by
+        # the unified read model, so a mirror failure cannot hide real progress.
+        logger.exception("Failed to persist unified OCR status document=%s", document_id)
+
+
+def availability_error() -> str | None:
+    """Return ``None`` only while the in-process OCR queue can accept work."""
+    if not settings.OCR_ENABLED:
+        return "OCR 服务未启用"
+    return _availability_error
+
+
+def is_available() -> bool:
+    return availability_error() is None and _queue is not None and bool(_workers)
 
 
 def derived_storage_key(doc: Document) -> str | None:
@@ -32,13 +59,21 @@ def derived_storage_key(doc: Document) -> str | None:
     return None
 
 
-def preview_storage_key(doc: Document) -> str:
+async def preview_storage_key(doc: Document) -> str:
     storage = get_storage()
     derived = derived_storage_key(doc)
-    if doc.ocr_status == "ready" and derived and storage.exists(derived):
+    # 重新处理期间继续提供上一份成功产物。新产物只有在数据库中的路径、
+    # 状态和派生更新时间原子切换后才会对用户可见。
+    if derived and await run_storage_io(storage.exists, derived):
         return derived
     from app.services.document_service import storage_key
     return storage_key(doc)
+
+
+def _existing_size(storage, key: str | None) -> int:
+    if not key or not storage.exists(key):
+        return 0
+    return storage.size(key)
 
 
 def _command_prefix() -> list[str] | None:
@@ -69,22 +104,29 @@ def _safe_error(stderr: str) -> str:
 
 
 async def _mark_unavailable(message: str) -> None:
-    await Document.filter(ext="pdf", ocr_status__in=["pending", "processing"]).update(
+    query = Document.filter(ext="pdf", ocr_status__in=["pending", "processing"])
+    document_ids = await query.values_list("id", flat=True)
+    await query.update(
         ocr_status="failed",
         ocr_error=message,
         ocr_updated_at=datetime.now(timezone.utc),
     )
+    for document_id in document_ids:
+        await _record_status(int(document_id), "failed", message)
 
 
 async def start() -> None:
-    global _queue
+    global _queue, _availability_error
     if _workers:
         return
+    _availability_error = "OCR 服务尚未启动"
     if not settings.OCR_ENABLED:
-        await _mark_unavailable("OCR 服务未启用")
+        _availability_error = "OCR 服务未启用"
+        await _mark_unavailable(_availability_error)
         return
     if not _command_prefix():
-        await _mark_unavailable("OCR 服务不可用，请安装 OCRmyPDF 后重试")
+        _availability_error = "OCR 服务不可用，请安装 OCRmyPDF 后重试"
+        await _mark_unavailable(_availability_error)
         return
 
     # 环境依赖后来补齐时自动恢复，不要求用户逐份点击重试。
@@ -112,9 +154,9 @@ async def start() -> None:
         ocr_updated_at=datetime.now(timezone.utc),
     )
     storage = get_storage()
-    for doc in await Document.filter(ext="pdf", ocr_status="ready"):
+    for doc in await Document.filter(ext="pdf", ocr_status="ready", deleted_at__isnull=True):
         key = derived_storage_key(doc)
-        if not key or not storage.exists(key):
+        if not key or not await run_storage_io(storage.exists, key):
             await Document.filter(id=doc.id).update(
                 ocr_status="pending",
                 ocr_path=None,
@@ -125,13 +167,17 @@ async def start() -> None:
     worker_count = max(1, min(settings.OCR_WORKERS, 4))
     for index in range(worker_count):
         _workers.append(asyncio.create_task(_worker(), name=f"pdf-ocr-{index + 1}"))
+    _availability_error = None
     logger.info("PDF OCR queue started with %s worker(s)", worker_count)
-    for doc_id in await Document.filter(ext="pdf", ocr_status="pending").values_list("id", flat=True):
+    # 回收站中的文档不参与 OCR，避免恢复前内容版本被刷新。
+    for doc_id in await Document.filter(
+        ext="pdf", ocr_status="pending", deleted_at__isnull=True
+    ).values_list("id", flat=True):
         await enqueue(int(doc_id))
 
 
 async def stop() -> None:
-    global _queue
+    global _queue, _availability_error
     tasks = list(_workers)
     _workers.clear()
     for task in tasks:
@@ -140,10 +186,11 @@ async def stop() -> None:
         await asyncio.gather(*tasks, return_exceptions=True)
     _queued_ids.clear()
     _queue = None
+    _availability_error = "OCR 服务尚未启动" if settings.OCR_ENABLED else "OCR 服务未启用"
 
 
 async def enqueue(doc_id: int) -> None:
-    if _queue is None or doc_id in _queued_ids:
+    if not is_available() or doc_id in _queued_ids:
         return
     _queued_ids.add(doc_id)
     await _queue.put(doc_id)
@@ -153,10 +200,8 @@ async def enqueue(doc_id: int) -> None:
 async def retry(doc: Document) -> None:
     if doc.ext != "pdf":
         raise CustomException("仅 PDF 支持 OCR")
-    if not settings.OCR_ENABLED:
-        raise CustomException("OCR 服务未启用")
-    if not _command_prefix():
-        raise CustomException("OCR 服务不可用，请先安装 OCRmyPDF")
+    if error := availability_error():
+        raise CustomException(error)
     if doc.ocr_status in ("pending", "processing"):
         return
     await Document.filter(id=doc.id).update(
@@ -164,6 +209,7 @@ async def retry(doc: Document) -> None:
         ocr_error=None,
         ocr_updated_at=datetime.now(timezone.utc),
     )
+    await _record_status(doc.id, "pending")
     await enqueue(doc.id)
 
 
@@ -181,6 +227,15 @@ async def _worker() -> None:
         finally:
             _queued_ids.discard(doc_id)
             _queue.task_done()
+            # 文档可能在 OCR 期间经历“删除→恢复”。恢复请求发生在任务释放
+            # 去重标记前时 enqueue 会被去重；此处补偿，避免文档永久停在 pending。
+            try:
+                if await Document.filter(
+                    id=doc_id, ocr_status="pending", deleted_at__isnull=True
+                ).exists():
+                    await enqueue(doc_id)
+            except Exception:
+                logger.exception("Failed to requeue restored OCR document %s", doc_id)
             logger.info("OCR job finished document=%s queue_depth=%s", doc_id, _queue.qsize())
 
 
@@ -243,13 +298,16 @@ async def _run_command(source: Path, output: Path) -> tuple[int, str]:
 
 
 async def process_document(doc_id: int) -> None:
-    claimed = await Document.filter(id=doc_id, ext="pdf", ocr_status="pending").update(
+    claimed = await Document.filter(
+        id=doc_id, ext="pdf", ocr_status="pending", deleted_at__isnull=True
+    ).update(
         ocr_status="processing",
         ocr_error=None,
         ocr_updated_at=datetime.now(timezone.utc),
     )
     if not claimed:
         return
+    await _record_status(doc_id, "processing")
 
     doc = await Document.get_or_none(id=doc_id).prefetch_related("account")
     if doc is None:
@@ -275,38 +333,68 @@ async def process_document(doc_id: int) -> None:
                 )
                 raise RuntimeError(safe_error)
 
-            # 文档可能在耗时处理期间被删除；此时不再生成孤立派生文件。
-            current = await Document.get_or_none(id=doc_id)
-            if current is None:
-                return
             async with account_lock(doc.account_id):
+                # 删除和 OCR 最终发布共用账号锁。若文档已进入回收站，保留删除
+                # 时的内容版本，不生成新产物，恢复后再从 pending 继续。
+                current = await Document.get_or_none(
+                    id=doc_id,
+                    ocr_status="processing",
+                    deleted_at__isnull=True,
+                )
+                if current is None:
+                    await Document.filter(
+                        id=doc_id,
+                        ocr_status="processing",
+                        deleted_at__isnull=False,
+                    ).update(
+                        ocr_status="pending",
+                        ocr_error=None,
+                        ocr_updated_at=datetime.now(timezone.utc),
+                    )
+                    await _record_status(doc_id, "pending")
+                    return
+                old_key = derived_storage_key(current)
+                storage = get_storage()
+                old_size = await run_storage_io(_existing_size, storage, old_key)
                 try:
-                    await ensure_additional_storage(doc.account_id, output.stat().st_size)
+                    # The old derivative remains readable until the database swap,
+                    # but it is reclaimed immediately afterwards. Credit it for the
+                    # per-account quota while retaining the full host free-space check.
+                    await ensure_additional_storage(
+                        doc.account_id,
+                        output.stat().st_size,
+                        reclaimable_size=old_size,
+                    )
                 except CustomException as exc:
                     raise RuntimeError("OCR 派生文件超过账号或服务器存储限额") from exc
                 with output.open("rb") as result:
-                    new_key = await get_storage().save(
+                    new_key = await storage.save(
                         f"document_{doc_id}_searchable.pdf",
                         result,
                         subdir=f"{doc.account.role}/{doc.account_id}/ocr",
                     )
-            old_key = derived_storage_key(current)
-            updated = await Document.filter(id=doc_id, ocr_status="processing").update(
-                ocr_status="ready",
-                ocr_path=RELATIVE_PREFIX + new_key,
-                ocr_error=None,
-                ocr_updated_at=datetime.now(timezone.utc),
-            )
-            if not updated:
-                get_storage().delete(new_key)
-                return
-            if old_key and old_key != new_key:
-                get_storage().delete(old_key)
+                updated = await Document.filter(
+                    id=doc_id,
+                    ocr_status="processing",
+                    deleted_at__isnull=True,
+                ).update(
+                    ocr_status="ready",
+                    ocr_path=RELATIVE_PREFIX + new_key,
+                    ocr_error=None,
+                    ocr_updated_at=datetime.now(timezone.utc),
+                )
+                if not updated:
+                    await run_storage_io(storage.delete, new_key)
+                    return
+                await _record_status(doc_id, "ready")
+                if old_key and old_key != new_key:
+                    await run_storage_io(storage.delete, old_key)
     except asyncio.CancelledError:
         await Document.filter(id=doc_id, ocr_status="processing").update(
             ocr_status="pending",
             ocr_updated_at=datetime.now(timezone.utc),
         )
+        await _record_status(doc_id, "pending")
         raise
     except Exception as exception:
         message = str(exception)
@@ -317,8 +405,21 @@ async def process_document(doc_id: int) -> None:
         else:
             logger.exception("OCR processing failed for document %s", doc_id)
             safe_message = "OCR 处理失败，请稍后重试或联系管理员"
-        await Document.filter(id=doc_id, ocr_status="processing").update(
+        updated = await Document.filter(
+            id=doc_id, ocr_status="processing", deleted_at__isnull=True
+        ).update(
             ocr_status="failed",
             ocr_error=safe_message,
             ocr_updated_at=datetime.now(timezone.utc),
         )
+        if updated:
+            await _record_status(doc_id, "failed", safe_message)
+        if not updated:
+            await Document.filter(
+                id=doc_id, ocr_status="processing", deleted_at__isnull=False
+            ).update(
+                ocr_status="pending",
+                ocr_error=None,
+                ocr_updated_at=datetime.now(timezone.utc),
+            )
+            await _record_status(doc_id, "pending")

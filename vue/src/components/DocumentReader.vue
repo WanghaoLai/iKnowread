@@ -4,16 +4,37 @@
     <div class="reader-toolbar">
       <div class="reader-title" :title="model.title">{{ model.title }}</div>
       <div class="reader-tools">
-        <template v-if="model.engine === 'pdfjs' && pdfDoc">
-          <el-radio-group v-model="readingMode" size="small" aria-label="阅读模式" @change="changeReadingMode">
+        <el-button
+            class="reader-highlight-button"
+            size="small"
+            :icon="CollectionTag"
+            :loading="highlightManager.loading"
+            @click="toggleHighlightManager"
+        >高亮 {{ highlights.length }}</el-button>
+        <div class="reader-search-box">
+          <el-input
+              v-model="search.query"
+              size="small"
+              clearable
+              maxlength="200"
+              :prefix-icon="Search"
+              placeholder="搜索文档内容"
+              aria-label="搜索文档内容"
+              @keyup.enter="runDocumentSearch"
+              @clear="closeDocumentSearch"
+          />
+          <el-button size="small" :icon="Search" :loading="search.loading" @click="runDocumentSearch">搜索</el-button>
+        </div>
+        <template v-if="model.engine === 'pdfjs'">
+          <el-radio-group v-model="readingMode" size="small" aria-label="阅读模式" :disabled="!pdfDoc" @change="changeReadingMode">
             <el-radio-button value="paged">分页阅读</el-radio-button>
             <el-radio-button value="continuous">长文阅读</el-radio-button>
           </el-radio-group>
-          <span class="reader-page">{{ readingMode === 'continuous' ? '当前 ' : '' }}{{ pageNum }} / {{ numPages }}</span>
+          <span class="reader-page">{{ pdfDoc ? `${readingMode === 'continuous' ? '当前 ' : ''}${pageNum} / ${numPages}` : '— / —' }}</span>
           <el-button-group>
-            <el-button size="small" @click="zoomBy(-0.25)" :disabled="zoom <= 0.5">-</el-button>
-            <el-button size="small" @click="fitWidth">适应宽度</el-button>
-            <el-button size="small" @click="zoomBy(0.25)" :disabled="zoom >= 3">+</el-button>
+            <el-button size="small" @click="zoomBy(-0.25)" :disabled="!pdfDoc || zoom <= 0.5">-</el-button>
+            <el-button size="small" @click="fitWidth" :disabled="!pdfDoc">适应宽度</el-button>
+            <el-button size="small" @click="zoomBy(0.25)" :disabled="!pdfDoc || zoom >= 3">+</el-button>
           </el-button-group>
         </template>
         <el-tag v-if="model.sourceFormat !== 'pdf'" size="small" effect="plain">
@@ -37,7 +58,7 @@
             @click="retryOcr"
         >重试识别</el-button>
         <el-tag
-            v-if="model.sourceFormat === 'pdf' && pdfDoc"
+            v-if="model.sourceFormat === 'pdf'"
             class="reader-selection-hint"
             size="small"
             effect="plain"
@@ -47,6 +68,23 @@
         </el-tag>
       </div>
     </div>
+
+    <DocumentSearchResults
+        v-if="search.open"
+        :search="search"
+        @close="closeDocumentSearch"
+        @select="jumpToSearchResult"
+    />
+
+    <DocumentHighlightManager
+        v-if="highlightManager.open"
+        :highlights="highlights"
+        :loading="highlightManager.loading"
+        @close="highlightManager.open = false"
+        @locate="locateManagedHighlight"
+        @edit="editManagedHighlight"
+        @remove="removeHighlight"
+    />
 
     <!-- 渲染区：PDF.js 画布 / docx-preview 容器 -->
     <div class="reader-body" ref="bodyRef">
@@ -92,74 +130,37 @@
       </nav>
     </Transition>
 
-    <Teleport to="body">
-      <aside
-          v-if="explain.visible"
-          ref="explainRef"
-          class="selection-explain"
-          :style="{ left: `${explain.left}px`, top: `${explain.top}px` }"
-          role="dialog"
-          aria-label="选中文字解释"
-          @pointerdown.stop
-      >
-        <header class="selection-explain-header">
-          <div class="selection-explain-title">
-            <span class="selection-explain-mark">AI</span>
-            <span>选文解释</span>
-          </div>
-          <button type="button" class="selection-icon-button" aria-label="关闭解释" @click="closeExplanation(true)">
-            <el-icon><Close /></el-icon>
-          </button>
-        </header>
-        <div class="selection-quote" :title="explain.selection">“{{ explain.selection }}”</div>
-        <div v-if="explain.loading" class="selection-explain-loading" role="status">
-          <el-icon class="is-loading"><Loading /></el-icon>
-          <span>正在理解所选内容…</span>
-        </div>
-        <div v-else-if="explain.error" class="selection-explain-error">
-          <span>{{ explain.error }}</span>
-          <button v-if="explain.needsConfig" type="button" @click="goToConfig">前往 API配置</button>
-          <button v-else type="button" @click="requestExplanation">重新解释</button>
-        </div>
-        <div v-else class="selection-explain-answer">{{ explain.answer }}</div>
-        <div v-if="explain.noteOpen && !explain.noteSaved" class="selection-note-compose">
-          <label for="selection-note-remark">添加个人备注（可选）</label>
-          <textarea
-              id="selection-note-remark"
-              v-model="explain.noteRemark"
-              maxlength="5000"
-              rows="3"
-              placeholder="记录你的理解、疑问或下一步行动"
-          ></textarea>
-          <div>
-            <span>{{ explain.noteRemark.length }} / 5000</span>
-            <button type="button" @click="explain.noteOpen = false">取消</button>
-            <button type="button" class="primary" :disabled="explain.noteSaving" @click="saveExplanationNote">
-              {{ explain.noteSaving ? '保存中…' : '保存笔记' }}
-            </button>
-          </div>
-        </div>
-        <footer v-if="!explain.loading && explain.answer" class="selection-explain-footer">
-          <span class="selection-model">{{ explain.model }}</span>
-          <div class="selection-footer-actions">
-            <button type="button" @click="copyExplanation">
-              <el-icon><CopyDocument /></el-icon>{{ explain.copied ? '已复制' : '复制' }}
-            </button>
-            <button v-if="explain.noteSaved" type="button" class="note-saved" @click="goToNotes">
-              <el-icon><Notebook /></el-icon>已加入 · 查看
-            </button>
-            <template v-else>
-              <button type="button" :disabled="explain.noteSaving" @click="saveExplanationNote">
-                <el-icon><Notebook /></el-icon>{{ explain.noteSaving ? '添加中…' : '一键添加' }}
-              </button>
-              <button type="button" :disabled="explain.noteSaving" @click="explain.noteOpen = !explain.noteOpen">
-                {{ explain.noteOpen ? '收起备注' : '备注后添加' }}
-              </button>
-            </template>
-          </div>
-        </footer>
-      </aside>
-    </Teleport>
+    <SelectionExplainPanel
+        ref="explainRef"
+        :explain="explain"
+        :selection-highlight="selectionHighlight"
+        @close="closeExplanation(true)"
+        @configure="goToConfig"
+        @retry="requestExplanation"
+        @save-highlight="saveSelectionHighlight"
+        @cancel-highlight="selectionHighlight.open = false"
+        @toggle-highlight="toggleHighlightCompose"
+        @show-highlight="showSavedSelectionHighlight"
+        @copy="copyExplanation"
+        @save-note="saveExplanationNote"
+        @cancel-note="explain.noteOpen = false"
+        @toggle-note="explain.noteOpen = !explain.noteOpen"
+        @show-notes="goToNotes"
+        @update-highlight-remark="selectionHighlight.remark = $event; selectionHighlight.remarkTouched = true"
+        @update-note-remark="explain.noteRemark = $event"
+    />
+
+    <DocumentHighlightDetail
+        ref="highlightDetailRef"
+        :detail="highlightDetail"
+        @close="closeHighlightDetail"
+        @edit="beginHighlightEdit"
+        @cancel-edit="highlightDetail.editing = false"
+        @save="saveHighlightRemark"
+        @locate="locateDetailHighlight"
+        @remove="removeHighlight"
+        @update:remark="highlightDetail.remark = $event"
+    />
   </div>
 </template>
 
@@ -169,23 +170,37 @@ import { useRouter } from 'vue-router'
 import * as pdfjsLib from 'pdfjs-dist'
 import PdfjsWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?worker'
 import { renderAsync } from 'docx-preview'
-import { ArrowLeft, ArrowRight, Close, CopyDocument, Loading, Notebook, Refresh, WarningFilled } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
+import { ArrowLeft, ArrowRight, CollectionTag, Loading, Refresh, Search, WarningFilled } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import DocumentHighlightDetail from '@/components/document-reader/DocumentHighlightDetail.vue'
+import DocumentHighlightManager from '@/components/document-reader/DocumentHighlightManager.vue'
+import DocumentSearchResults from '@/components/document-reader/DocumentSearchResults.vue'
+import SelectionExplainPanel from '@/components/document-reader/SelectionExplainPanel.vue'
+import { useDocumentHighlights } from '@/composables/useDocumentHighlights'
+import { useDocumentOcr } from '@/composables/useDocumentOcr'
+import { useDocumentSearch } from '@/composables/useDocumentSearch'
+import { isPdfRenderCancellation as isRenderCancellation, usePdfRenderer } from '@/composables/usePdfRenderer'
+import { useReadingProgress } from '@/composables/useReadingProgress'
 import { fetchBytes } from '@/utils/preview'
-import request from '@/utils/request'
+import request, { notifyRequestError } from '@/utils/request'
+import { getDocumentOcrStatus, retryDocumentOcr } from '@/api/documents'
+import {
+  anchorFromRange,
+  isSourceAnchor,
+  resolveAnchorRange,
+} from '@/utils/sourceAnchor'
 
 pdfjsLib.GlobalWorkerOptions.workerPort = new PdfjsWorker()
 
 const READING_MODE_KEY = 'iknowread:pdf-reading-mode'
-const props = defineProps({ model: { type: Object, required: true } })
+const props = defineProps({
+  model: { type: Object, required: true },
+  initialAnchor: { type: Object, default: null },
+})
 const router = useRouter()
 const loading = ref(false)
 const loadingText = ref('加载中...')
 const error = ref('')
-const activeUrl = ref(props.model.url)
-const ocrStatus = ref(props.model.ocrStatus || 'not_applicable')
-const ocrError = ref(props.model.ocrError || '')
-const ocrRetrying = ref(false)
 // PDFDocumentProxy contains native private fields, so it must never be deeply proxied.
 const pdfDoc = shallowRef(null)
 const pageNum = ref(1)
@@ -201,6 +216,25 @@ const textLayerRef = ref()
 const continuousRef = ref()
 const docxRef = ref()
 const explainRef = ref()
+const highlightDetailRef = ref()
+const {
+  highlights,
+  highlightManager,
+  highlightDetail,
+  selectionHighlight,
+  replaceAll: replaceHighlights,
+  clear: clearHighlights,
+  openDetail: openHighlightState,
+  closeDetail: closeHighlightDetail,
+  beginDetailEdit: beginHighlightEditState,
+  resetSelection: resetSelectionHighlight,
+  upsert: upsertHighlight,
+  removeLocal: removeHighlightState,
+  setResolvedRanges,
+  clearResolvedRanges,
+  rangeFor: rangeForHighlight,
+  findResolved: findResolvedHighlight,
+} = useDocumentHighlights()
 const explain = reactive({
   visible: false,
   selection: '',
@@ -210,6 +244,8 @@ const explain = reactive({
   provider: '',
   providerName: '',
   configName: '',
+  documentVersion: '',
+  sourceAnchor: null,
   error: '',
   needsConfig: false,
   loading: false,
@@ -223,19 +259,13 @@ const explain = reactive({
   top: 12,
   anchorRect: null,
 })
-
-let renderTask = null
-let textLayer = null
-let continuousObserver = null
-let continuousEntries = []
-let continuousBuildVersion = 0
-let loadingTask = null
 let abortController = null
 let explainController = null
 let loadVersion = 0
 let resizeObserver = null
 let resizeTimer = null
-let ocrTimer = null
+let highlightLoadSequence = 0
+let appliedInitialAnchor = ''
 const explanationCache = new Map()
 
 const hardenDocxDom = (container) => {
@@ -258,8 +288,25 @@ const hardenDocxDom = (container) => {
   })
 }
 
-const ocrBusy = computed(() => ['pending', 'processing'].includes(ocrStatus.value))
-const ocrDisabled = computed(() => ocrError.value === 'OCR 服务未启用')
+const {
+  activeUrl,
+  contentVersion,
+  ocrStatus,
+  ocrError,
+  ocrRetrying,
+  ocrBusy,
+  ocrDisabled,
+  retry: retryOcr,
+  sync: syncOcr,
+  stop: stopOcr,
+} = useDocumentOcr({
+  getModel: () => props.model,
+  reload: () => load(),
+  notifyReady: () => ElMessage.success('文档处理完成，已刷新可搜索内容'),
+  fetchStatus: getDocumentOcrStatus,
+  requestRetry: id => retryDocumentOcr(id, { skipErrorToast: true }),
+  notifyRetryError: error => notifyRequestError(error, '重新提交文字识别失败，请重试'),
+})
 const selectionHint = computed(() => {
   if (selectableTextCount.value) return '拖动选择文字 · AI解释'
   if (ocrBusy.value) return '扫描文字识别完成后将自动刷新'
@@ -268,61 +315,247 @@ const selectionHint = computed(() => {
   return readingMode.value === 'continuous' ? '当前文档没有可选择文字' : '此页没有可选择文字'
 })
 
-const versionedUrl = (url, revision) => {
-  if (!revision) return url
-  const separator = url.includes('?') ? '&' : '?'
-  return `${url}${separator}ocr=${encodeURIComponent(revision)}`
-}
-
-const clearOcrTimer = () => {
-  clearTimeout(ocrTimer)
-  ocrTimer = null
-}
-
-const scheduleOcrPoll = () => {
-  clearOcrTimer()
-  if (ocrBusy.value) ocrTimer = setTimeout(refreshOcrStatus, 2500)
-}
-
-const refreshOcrStatus = async () => {
-  try {
-    const response = await request.get(`/document/${props.model.id}/ocr-status`)
-    const doc = response.data || {}
-    const previous = ocrStatus.value
-    ocrStatus.value = doc.ocr_status || previous
-    ocrError.value = doc.ocr_error || ''
-    if (ocrStatus.value === 'ready' && previous !== 'ready') {
-      activeUrl.value = versionedUrl(props.model.url, doc.ocr_updated_at || Date.now())
-      await load()
-      ElMessage.success('扫描文字识别完成，现在可以选取内容')
-    }
-  } catch (_) {
-    // 请求层已给出必要提示；下一次由用户重试，避免网络异常时持续弹窗。
-    clearOcrTimer()
-    return
-  }
-  scheduleOcrPoll()
-}
-
-const retryOcr = async () => {
-  ocrRetrying.value = true
-  try {
-    const response = await request.post(`/document/${props.model.id}/ocr`)
-    ocrStatus.value = response.data?.ocr_status || 'pending'
-    ocrError.value = ''
-    scheduleOcrPoll()
-  } finally {
-    ocrRetrying.value = false
-  }
-}
-
 const normalizeSelection = value => value
   .replace(/\u00a0/g, ' ')
   .replace(/\s+/g, ' ')
   .replace(/([\u3400-\u9fff])\s+(?=[\u3400-\u9fff])/g, '$1')
   .trim()
 
-const isRenderCancellation = exception => ['RenderingCancelledException', 'AbortException'].includes(exception?.name)
+const currentSourceModel = () => ({
+  id: props.model.id,
+  contentVersion: contentVersion.value,
+  sourceFormat: props.model.sourceFormat,
+})
+
+const {
+  scrollProgression,
+  persist: persistReadingProgress,
+  flush: flushReadingProgress,
+  load: loadStoredReadingProgress,
+  cancel: cancelReadingProgress,
+} = useReadingProgress({
+  getSourceModel: currentSourceModel,
+  getSourceFormat: () => props.model.sourceFormat,
+  getPage: () => pageNum.value,
+  getPageCount: () => numPages.value,
+  getReadingMode: () => readingMode.value,
+  getScrollElement: () => bodyRef.value,
+})
+
+const rangeScope = range => {
+  if (props.model.sourceFormat === 'docx') {
+    return { element: docxRef.value, page: null }
+  }
+  const common = range.commonAncestorContainer.nodeType === Node.ELEMENT_NODE
+    ? range.commonAncestorContainer
+    : range.commonAncestorContainer.parentElement
+  const layer = common?.closest?.('.textLayer')
+  if (!layer) return null
+  const slot = layer.closest('.continuous-page')
+  return {
+    element: layer,
+    page: slot ? Number(slot.dataset.pageNumber) : pageNum.value,
+  }
+}
+
+const clearSourceHighlight = () => {
+  if (window.CSS?.highlights) window.CSS.highlights.delete('iknowread-source-anchor')
+}
+
+const clearPersistentHighlightRanges = () => {
+  clearResolvedRanges()
+  if (window.CSS?.highlights) window.CSS.highlights.delete('iknowread-persistent-highlights')
+}
+
+const {
+  setLoadingTask: setPdfLoadingTask,
+  clearLoadingTask: clearPdfLoadingTask,
+  updateContinuousPageNumber,
+  fitToWidth,
+  fitWidth,
+  goPage,
+  zoomBy,
+  changeReadingMode,
+  renderedTextLayer,
+  ensureTextLayer,
+  destroy: destroyPdf,
+} = usePdfRenderer({
+  pdfDoc,
+  pageNum,
+  numPages,
+  zoom,
+  readingMode,
+  loading,
+  loadingText,
+  selectableTextCount,
+  continuousRenderedCount,
+  bodyRef,
+  canvasRef,
+  pageSurfaceRef,
+  textLayerRef,
+  continuousRef,
+  onBeforeRender: () => {
+    closeExplanation(true)
+    clearSourceHighlight()
+    clearPersistentHighlightRanges()
+  },
+  onTextRendered: () => applyPersistentHighlights(),
+  onProgress: () => persistReadingProgress(),
+  onError: exception => { error.value = exception?.message || '页面渲染失败' },
+  readingModeStorageKey: READING_MODE_KEY,
+})
+
+const renderedScopeForHighlight = anchor => {
+  if (anchor.source_format === 'docx') return docxRef.value
+  return renderedTextLayer(anchor.page)
+}
+
+const applyPersistentHighlights = () => {
+  clearPersistentHighlightRanges()
+  const ranges = []
+  const resolved = []
+  for (const item of highlights.value) {
+    const scope = renderedScopeForHighlight(item.source_anchor)
+    const range = scope ? resolveAnchorRange(scope, item.source_anchor) : null
+    if (!range) continue
+    ranges.push(range)
+    resolved.push({ item, range })
+  }
+  setResolvedRanges(resolved)
+  if (ranges.length && window.CSS?.highlights && window.Highlight) {
+    window.CSS.highlights.set('iknowread-persistent-highlights', new window.Highlight(...ranges))
+  }
+}
+
+const loadHighlights = async () => {
+  const sequence = ++highlightLoadSequence
+  const documentId = Number(props.model.id)
+  const documentVersion = contentVersion.value
+  if (!Number.isInteger(documentId) || !documentVersion) {
+    replaceHighlights([])
+    clearPersistentHighlightRanges()
+    return
+  }
+  highlightManager.loading = true
+  try {
+    const response = await request.get('/highlights', {
+      params: { documentId, documentVersion },
+    })
+    if (
+      sequence !== highlightLoadSequence
+      || documentId !== Number(props.model.id)
+      || documentVersion !== contentVersion.value
+    ) return
+    replaceHighlights(response.data || [])
+    await nextTick()
+    applyPersistentHighlights()
+  } catch (_) {
+    replaceHighlights([])
+    clearPersistentHighlightRanges()
+  } finally {
+    if (sequence === highlightLoadSequence) highlightManager.loading = false
+  }
+}
+
+const toggleHighlightManager = async () => {
+  highlightManager.open = !highlightManager.open
+  if (highlightManager.open) closeDocumentSearch()
+  if (highlightManager.open && !highlights.value.length && !highlightManager.loading) {
+    await loadHighlights()
+  }
+}
+
+const scrollReaderTo = (top, behavior = 'smooth') => {
+  const body = bodyRef.value
+  if (!body) return
+  const maximum = Math.max(0, body.scrollHeight - body.clientHeight)
+  body.scrollTo({
+    top: Math.max(0, Math.min(maximum, Number(top) || 0)),
+    left: body.scrollLeft,
+    behavior,
+  })
+}
+
+const scrollRangeIntoReader = (range, behavior = 'smooth') => {
+  const body = bodyRef.value
+  if (!body) return
+  const rangeRect = range.getBoundingClientRect()
+  const bodyRect = body.getBoundingClientRect()
+  const centeredTop = body.scrollTop + rangeRect.top - bodyRect.top
+    - Math.max(16, (body.clientHeight - rangeRect.height) / 2)
+  scrollReaderTo(centeredTop, behavior)
+}
+
+const showSourceRange = (range, { behavior = 'smooth' } = {}) => {
+  clearSourceHighlight()
+  window.getSelection()?.removeAllRanges()
+  if (window.CSS?.highlights && window.Highlight) {
+    window.CSS.highlights.set('iknowread-source-anchor', new window.Highlight(range))
+  } else {
+    const selection = window.getSelection()
+    selection?.addRange(range)
+  }
+  scrollRangeIntoReader(range, behavior)
+}
+
+const scopeForAnchor = async (anchor, { behavior = 'smooth' } = {}) => {
+  if (anchor.source_format === 'docx') return docxRef.value
+  const scope = await ensureTextLayer(anchor.page)
+  if (!scope) return null
+  if (scope.offsetTop !== null) scrollReaderTo(scope.offsetTop - 16, behavior)
+  return scope.element
+}
+
+const jumpToAnchor = async (anchor, { silent = false, behavior = 'smooth' } = {}) => {
+  if (!isSourceAnchor(anchor)) {
+    if (!silent) ElMessage.warning('原文定位数据无效')
+    return false
+  }
+  if (Number(anchor.document_id) !== Number(props.model.id)) {
+    if (!silent) ElMessage.warning('该定位不属于当前文档')
+    return false
+  }
+  if (anchor.document_version !== contentVersion.value) {
+    if (!silent) ElMessage.warning('原文来自其他内容版本，无法在当前文档中定位')
+    return false
+  }
+  if (anchor.source_format !== props.model.sourceFormat) {
+    if (!silent) ElMessage.warning('原文定位格式与当前文档不一致')
+    return false
+  }
+  const scope = await scopeForAnchor(anchor, { behavior })
+  if (!scope) return false
+  if (!anchor.selector) {
+    if ((anchor.source_format === 'docx' || readingMode.value === 'continuous') && bodyRef.value) {
+      const maximum = Math.max(0, bodyRef.value.scrollHeight - bodyRef.value.clientHeight)
+      scrollReaderTo(maximum * anchor.progression, behavior)
+    }
+    persistReadingProgress()
+    return true
+  }
+  const range = resolveAnchorRange(scope, anchor)
+  if (!range) {
+    if (!silent) ElMessage.warning('没有找到对应原文，文档排版可能已经变化')
+    return false
+  }
+  showSourceRange(range, { behavior })
+  persistReadingProgress()
+  return true
+}
+
+const {
+  search,
+  close: closeDocumentSearch,
+  run: runDocumentSearch,
+  select: jumpToSearchResult,
+} = useDocumentSearch({
+  getSourceModel: currentSourceModel,
+  getSourceFormat: () => props.model.sourceFormat,
+  getPdfDocument: () => pdfDoc.value,
+  getDocxElement: () => docxRef.value,
+  beforeOpen: () => { highlightManager.open = false },
+  jumpToAnchor,
+})
 
 const selectionBelongsToReader = range => {
   const node = range.commonAncestorContainer
@@ -333,13 +566,142 @@ const positionExplanation = async () => {
   const rect = explain.anchorRect
   if (!rect) return
   await nextTick()
-  const width = Math.min(explainRef.value?.offsetWidth || 380, window.innerWidth - 24)
-  const height = Math.min(explainRef.value?.offsetHeight || 260, window.innerHeight - 24)
+  const element = explainRef.value?.element
+  const width = Math.min(element?.offsetWidth || 380, window.innerWidth - 24)
+  const height = Math.min(element?.offsetHeight || 260, window.innerHeight - 24)
   explain.left = Math.max(12, Math.min(window.innerWidth - width - 12, rect.left + rect.width / 2 - width / 2))
   const below = rect.bottom + 12
   explain.top = below + height <= window.innerHeight - 12
     ? below
     : Math.max(12, rect.top - height - 12)
+}
+
+const positionHighlightDetail = async () => {
+  const rect = highlightDetail.anchorRect
+  if (!rect) return
+  await nextTick()
+  const element = highlightDetailRef.value?.element
+  const width = Math.min(element?.offsetWidth || 360, window.innerWidth - 24)
+  const height = Math.min(element?.offsetHeight || 260, window.innerHeight - 24)
+  highlightDetail.left = Math.max(12, Math.min(window.innerWidth - width - 12, rect.left + rect.width / 2 - width / 2))
+  const below = rect.bottom + 10
+  highlightDetail.top = below + height <= window.innerHeight - 12
+    ? below
+    : Math.max(12, rect.top - height - 10)
+}
+
+const openHighlightDetail = (item, rect = null, { edit = false } = {}) => {
+  if (!item) return
+  closeExplanation(false)
+  const fallback = {
+    left: Math.max(12, window.innerWidth / 2 - 1),
+    right: Math.max(12, window.innerWidth / 2 + 1),
+    top: Math.max(12, window.innerHeight / 2 - 1),
+    bottom: Math.max(12, window.innerHeight / 2 + 1),
+    width: 2,
+    height: 2,
+  }
+  openHighlightState(item, rect || fallback, { edit })
+  positionHighlightDetail()
+}
+
+const beginHighlightEdit = () => {
+  if (!highlightDetail.item) return
+  beginHighlightEditState()
+  positionHighlightDetail()
+}
+
+const saveHighlightRemark = async () => {
+  const item = highlightDetail.item
+  if (!item || highlightDetail.saving) return
+  highlightDetail.saving = true
+  try {
+    const response = await request.put(`/highlights/${item.id}`, { remark: highlightDetail.remark })
+    const updated = response.data
+    upsertHighlight(updated)
+    highlightDetail.editing = false
+    applyPersistentHighlights()
+    ElMessage.success('高亮备注已更新')
+  } catch (error) {
+    notifyRequestError(error, '高亮备注保存失败，请重试')
+  } finally {
+    highlightDetail.saving = false
+    positionHighlightDetail()
+  }
+}
+
+const locateManagedHighlight = async (item, { open = true, edit = false } = {}) => {
+  highlightManager.open = false
+  const located = await jumpToAnchor(item.source_anchor)
+  if (!located || !open) return
+  // 等待平滑定位结束，避免滚动处理立即关闭刚打开的备注卡片。
+  await new Promise(resolve => window.setTimeout(resolve, 360))
+  await nextTick()
+  applyPersistentHighlights()
+  const rect = rangeForHighlight(item)?.getBoundingClientRect()
+  openHighlightDetail(item, rect, { edit })
+}
+
+const editManagedHighlight = item => locateManagedHighlight(item, { edit: true })
+
+const locateDetailHighlight = async () => {
+  const item = highlightDetail.item
+  if (!item) return
+  closeHighlightDetail()
+  await locateManagedHighlight(item, { open: true })
+}
+
+const removeHighlight = async item => {
+  if (!item) return
+  // 悬浮窗层级（4000+）必须盖过外层 el-dialog（约 2000），而 ElMessageBox 的
+  // 层级低于悬浮窗；先关闭悬浮窗再确认，避免确认框被悬浮窗遮挡。
+  closeHighlightDetail()
+  highlightManager.open = false
+  try {
+    await ElMessageBox.confirm('删除后，高亮及其备注将无法恢复。', '删除高亮', {
+      type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消',
+    })
+  } catch (_) {
+    return
+  }
+  try {
+    await request.delete(`/highlights/${item.id}`)
+  } catch (error) {
+    notifyRequestError(error, '高亮删除失败，请重试')
+    return
+  }
+  removeHighlightState(item.id)
+  applyPersistentHighlights()
+  ElMessage.success('高亮已删除')
+}
+
+const caretPointFromEvent = event => {
+  if (document.caretPositionFromPoint) {
+    const point = document.caretPositionFromPoint(event.clientX, event.clientY)
+    return point ? { node: point.offsetNode, offset: point.offset } : null
+  }
+  const range = document.caretRangeFromPoint?.(event.clientX, event.clientY)
+  return range ? { node: range.startContainer, offset: range.startOffset } : null
+}
+
+const pointInsideRange = (range, point) => {
+  try {
+    return range.isPointInRange(point.node, point.offset)
+  } catch (_) {
+    return false
+  }
+}
+
+const handleHighlightClick = event => {
+  const selection = window.getSelection()
+  if (selection && !selection.isCollapsed) return
+  if (!event.target.closest?.('.textLayer, .reader-docx')) return
+  const point = caretPointFromEvent(event)
+  if (!point) return
+  const resolved = findResolvedHighlight(entry => pointInsideRange(entry.range, point))
+  if (!resolved) return
+  event.preventDefault()
+  openHighlightDetail(resolved.item, resolved.range.getBoundingClientRect())
 }
 
 const closeExplanation = (clearSelection = false) => {
@@ -352,21 +714,25 @@ const closeExplanation = (clearSelection = false) => {
 
 const requestExplanation = async () => {
   const content = explain.selection
-  if (!content || !explain.visible) return
-  const cacheKey = `${props.model.id}:${content}`
+  const sourceAnchor = explain.sourceAnchor
+  if (!content || !explain.visible || !isSourceAnchor(sourceAnchor)) return
+  const cacheKey = `${sourceAnchor.document_id}:${sourceAnchor.document_version}:${sourceAnchor.page || 0}:${sourceAnchor.selector.position.start}:${content}`
   const cached = explanationCache.get(cacheKey)
   if (cached) {
     Object.assign(explain, {
       ...cached, loading: false, error: '', needsConfig: false, copied: false,
       noteOpen: false, noteRemark: '', noteSaving: false, noteSaved: false, noteId: null,
     })
+    if (!selectionHighlight.saved && !selectionHighlight.remarkTouched) {
+      selectionHighlight.remark = cached.answer || ''
+    }
     positionExplanation()
     return
   }
   explainController?.abort()
   explainController = new AbortController()
   Object.assign(explain, {
-    loading: true, answer: '', model: '', modelName: '', provider: '', providerName: '', configName: '',
+    loading: true, answer: '', model: '', modelName: '', provider: '', providerName: '', configName: '', documentVersion: '',
     error: '', needsConfig: false, copied: false,
     noteOpen: false, noteRemark: '', noteSaving: false, noteSaved: false, noteId: null,
   })
@@ -374,7 +740,7 @@ const requestExplanation = async () => {
   try {
     const response = await request.post('/ai/explain', {
       content,
-      document_title: props.model.title || '',
+      source_anchor: sourceAnchor,
     }, { signal: explainController.signal, timeout: 135000 })
     if (!explain.visible || explain.selection !== content) return
     // 展示口径统一为「服务商 · 模型」，不显示配置名称
@@ -387,10 +753,15 @@ const requestExplanation = async () => {
       provider: response.data.provider || '',
       providerName: response.data.provider_name || '',
       configName: response.data.config_name || '',
+      documentVersion: response.data.source_anchor?.document_version || sourceAnchor.document_version,
+      sourceAnchor: response.data.source_anchor || sourceAnchor,
     }
     if (explanationCache.size >= 50) explanationCache.delete(explanationCache.keys().next().value)
     explanationCache.set(cacheKey, value)
     Object.assign(explain, { ...value, loading: false })
+    if (!selectionHighlight.saved && !selectionHighlight.remarkTouched) {
+      selectionHighlight.remark = value.answer || ''
+    }
   } catch (exception) {
     if (exception.code === 'ERR_CANCELED' || !explain.visible || explain.selection !== content) return
     const message = exception.response?.data?.msg || '解释失败，请稍后重试'
@@ -417,8 +788,23 @@ const captureSelection = () => {
       ElMessage.warning('一次最多解释 4000 个字符，请缩小选取范围')
       return
     }
-    if (explain.visible && explain.selection === content) return
+    const scope = rangeScope(range)
+    const sourceAnchor = scope && anchorFromRange(currentSourceModel(), range, scope.element, {
+      page: scope.page,
+      progression: scrollProgression(),
+    })
+    if (!sourceAnchor) {
+      ElMessage.warning('无法建立原文定位，请重新选择内容')
+      return
+    }
+    if (
+      explain.visible
+      && explain.selection === content
+      && explain.sourceAnchor?.selector?.position?.start === sourceAnchor.selector.position.start
+      && explain.sourceAnchor?.page === sourceAnchor.page
+    ) return
     explainController?.abort()
+    resetSelectionHighlight()
     Object.assign(explain, {
       visible: true,
       selection: content,
@@ -428,6 +814,8 @@ const captureSelection = () => {
       provider: '',
       providerName: '',
       configName: '',
+      documentVersion: sourceAnchor.document_version,
+      sourceAnchor,
       error: '',
       needsConfig: false,
       loading: true,
@@ -454,6 +842,56 @@ const copyExplanation = async () => {
   }
 }
 
+const toggleHighlightCompose = () => {
+  selectionHighlight.open = !selectionHighlight.open
+  if (selectionHighlight.open && !selectionHighlight.remarkTouched && !selectionHighlight.remark) {
+    selectionHighlight.remark = explain.answer || ''
+  }
+  positionExplanation()
+}
+
+const saveSelectionHighlight = async () => {
+  if (selectionHighlight.saving || selectionHighlight.saved || !isSourceAnchor(explain.sourceAnchor)) return
+  const documentId = Number(props.model.id)
+  if (!Number.isInteger(documentId) || documentId < 1) {
+    ElMessage.error('当前文档信息无效，无法保存高亮')
+    return
+  }
+  selectionHighlight.saving = true
+  try {
+    const remark = selectionHighlight.remarkTouched
+      ? selectionHighlight.remark
+      : (selectionHighlight.remark || explain.answer || '')
+    const response = await request.post('/highlights', {
+      document_id: documentId,
+      source_anchor: explain.sourceAnchor,
+      selected_text: explain.selection,
+      remark,
+      provider: explain.provider || null,
+      config_name: explain.configName || null,
+      model: explain.modelName || null,
+    })
+    const created = response.data
+    upsertHighlight(created, { selected: true })
+    await nextTick()
+    applyPersistentHighlights()
+    window.getSelection()?.removeAllRanges()
+    ElMessage.success(created.remark ? '高亮及备注已保存' : '高亮已保存')
+  } catch (error) {
+    notifyRequestError(error, '高亮保存失败，请重试')
+  } finally {
+    selectionHighlight.saving = false
+    positionExplanation()
+  }
+}
+
+const showSavedSelectionHighlight = () => {
+  const item = highlights.value.find(entry => entry.id === selectionHighlight.id)
+  if (!item) return
+  const rect = rangeForHighlight(item)?.getBoundingClientRect() || explain.anchorRect
+  openHighlightDetail(item, rect)
+}
+
 const saveExplanationNote = async () => {
   if (!explain.answer || explain.noteSaving || explain.noteSaved) return
   const documentId = Number(props.model.id)
@@ -466,6 +904,8 @@ const saveExplanationNote = async () => {
     const response = await request.post('/notes', {
       source_type: 'ai_explanation',
       document_id: documentId,
+      document_version: explain.documentVersion || contentVersion.value,
+      source_anchor: explain.sourceAnchor,
       selected_text: explain.selection,
       content: explain.answer,
       remark: explain.noteRemark,
@@ -477,6 +917,8 @@ const saveExplanationNote = async () => {
     explain.noteSaved = true
     explain.noteOpen = false
     ElMessage.success('已加入「我的笔记」')
+  } catch (error) {
+    notifyRequestError(error, '笔记保存失败，请重试')
   } finally {
     explain.noteSaving = false
     positionExplanation()
@@ -494,275 +936,49 @@ const goToConfig = () => {
 }
 
 const handleDocumentPointerDown = event => {
-  if (explain.visible && !explainRef.value?.contains(event.target)) closeExplanation(false)
+  if (explain.visible && !explainRef.value?.element?.contains(event.target)) closeExplanation(false)
+  if (
+    highlightDetail.visible
+    && !highlightDetailRef.value?.element?.contains(event.target)
+    && !event.target.closest?.('.reader-highlight-manager')
+  ) closeHighlightDetail()
 }
 
 const handleBodyScroll = () => {
   closeExplanation(true)
+  closeHighlightDetail()
   updateContinuousPageNumber()
+  if (!loading.value) persistReadingProgress()
 }
 
-const cancelRender = async () => {
-  textLayer?.cancel()
-  textLayer = null
-  if (!renderTask) return
-  const task = renderTask
-  renderTask = null
-  task.cancel()
-  try { await task.promise } catch (exception) {
-    if (!isRenderCancellation(exception)) throw exception
+const sourcePositionToRestore = () => {
+  const initial = props.initialAnchor
+  const signature = initial ? JSON.stringify(initial) : ''
+  if (initial && signature !== appliedInitialAnchor) {
+    return { anchor: initial, signature, silent: false }
   }
+  const progress = loadStoredReadingProgress()
+  return progress ? { anchor: progress, signature: '', silent: true } : null
 }
 
-const cancelContinuousRender = async () => {
-  continuousBuildVersion += 1
-  continuousObserver?.disconnect()
-  continuousObserver = null
-  const pending = []
-  for (const entry of continuousEntries) {
-    entry.textLayer?.cancel()
-    if (entry.renderTask) {
-      try { entry.renderTask.cancel() } catch (_) {}
-    }
-    if (entry.renderPromise) pending.push(entry.renderPromise)
-  }
-  continuousEntries = []
-  continuousRenderedCount.value = 0
-  continuousRef.value?.replaceChildren()
-  if (pending.length) await Promise.allSettled(pending)
-}
-
-const updateContinuousPageNumber = () => {
-  if (readingMode.value !== 'continuous' || !bodyRef.value || !continuousEntries.length) return
-  const target = bodyRef.value.scrollTop + bodyRef.value.clientHeight * 0.28
-  let low = 0
-  let high = continuousEntries.length - 1
-  while (low < high) {
-    const middle = Math.ceil((low + high) / 2)
-    if (continuousEntries[middle].slot.offsetTop <= target) low = middle
-    else high = middle - 1
-  }
-  pageNum.value = continuousEntries[low].pageNumber
-}
-
-const renderContinuousPage = (entry, version) => {
-  if (!entry || entry.rendered || entry.rendering || version !== continuousBuildVersion || !pdfDoc.value) return
-  entry.rendering = true
-  entry.status.textContent = `正在加载第 ${entry.pageNumber} 页…`
-  const promise = (async () => {
-    const viewport = entry.page.getViewport({ scale: zoom.value })
-    const dpr = window.devicePixelRatio || 1
-    entry.canvas.width = Math.ceil(viewport.width * dpr)
-    entry.canvas.height = Math.ceil(viewport.height * dpr)
-    entry.canvas.style.width = `${viewport.width}px`
-    entry.canvas.style.height = `${viewport.height}px`
-    entry.surface.style.width = `${viewport.width}px`
-    entry.surface.style.height = `${viewport.height}px`
-    entry.slot.style.minHeight = `${viewport.height}px`
-    const params = { canvasContext: entry.canvas.getContext('2d'), viewport }
-    if (dpr !== 1) params.transform = [dpr, 0, 0, dpr, 0, 0]
-    const task = entry.page.render(params)
-    entry.renderTask = task
-    const currentTextLayer = new pdfjsLib.TextLayer({
-      textContentSource: entry.page.streamTextContent({ includeMarkedContent: true, disableNormalization: true }),
-      container: entry.textContainer,
-      viewport,
-    })
-    entry.textLayer = currentTextLayer
-    await Promise.all([task.promise, currentTextLayer.render()])
-    if (version !== continuousBuildVersion) return
-    entry.rendered = true
-    entry.status.textContent = ''
-    continuousRenderedCount.value += 1
-    const textCount = currentTextLayer.textContentItemsStr.join('').trim().length
-    entry.textCount = textCount
-    selectableTextCount.value += textCount
-  })().catch(exception => {
-    if (version === continuousBuildVersion && !isRenderCancellation(exception)) {
-      entry.status.textContent = `第 ${entry.pageNumber} 页加载失败，滚动后将重试`
-      entry.status.classList.add('error')
-    }
-  }).finally(() => {
-    entry.rendering = false
-    entry.renderTask = null
-    entry.textLayer = null
-    entry.renderPromise = null
+const restoreSourcePosition = async (restoration = sourcePositionToRestore()) => {
+  if (!restoration) return
+  if (restoration.signature) appliedInitialAnchor = restoration.signature
+  await jumpToAnchor(restoration.anchor, {
+    silent: restoration.silent,
+    behavior: 'auto',
   })
-  entry.renderPromise = promise
-  return promise
-}
-
-const prepareContinuousPages = async () => {
-  const documentProxy = pdfDoc.value
-  if (!documentProxy || !continuousRef.value) return
-  const targetPage = Math.min(Math.max(pageNum.value, 1), documentProxy.numPages)
-  closeExplanation(true)
-  await cancelContinuousRender()
-  if (documentProxy !== pdfDoc.value) return
-  selectableTextCount.value = 0
-  const version = ++continuousBuildVersion
-  const fragment = document.createDocumentFragment()
-  const entries = []
-  for (let number = 1; number <= documentProxy.numPages; number += 1) {
-    const page = await documentProxy.getPage(number)
-    if (version !== continuousBuildVersion || documentProxy !== pdfDoc.value) return
-    const viewport = page.getViewport({ scale: zoom.value })
-    const slot = document.createElement('section')
-    slot.className = 'continuous-page'
-    slot.dataset.pageNumber = String(number)
-    slot.style.minHeight = `${viewport.height}px`
-    const badge = document.createElement('span')
-    badge.className = 'continuous-page-number'
-    badge.textContent = `${number} / ${documentProxy.numPages}`
-    const surface = document.createElement('div')
-    surface.className = 'reader-page-surface'
-    surface.style.width = `${viewport.width}px`
-    surface.style.height = `${viewport.height}px`
-    const canvas = document.createElement('canvas')
-    const textContainer = document.createElement('div')
-    textContainer.className = 'textLayer'
-    textContainer.tabIndex = 0
-    textContainer.setAttribute('aria-label', `PDF 第 ${number} 页可选择文字层`)
-    const status = document.createElement('div')
-    status.className = 'continuous-page-status'
-    status.textContent = `等待加载第 ${number} 页…`
-    surface.append(canvas, textContainer, status)
-    slot.append(badge, surface)
-    fragment.append(slot)
-    entries.push({ pageNumber: number, page, slot, surface, canvas, textContainer, status, rendered: false, rendering: false, renderTask: null, textLayer: null, renderPromise: null, textCount: 0 })
-    if (number % 25 === 0) await new Promise(resolve => requestAnimationFrame(resolve))
-  }
-  if (version !== continuousBuildVersion || documentProxy !== pdfDoc.value) return
-  continuousEntries = entries
-  continuousRef.value.replaceChildren(fragment)
-  continuousObserver = new IntersectionObserver(changes => {
-    for (const change of changes) {
-      if (change.isIntersecting) renderContinuousPage(continuousEntries[Number(change.target.dataset.pageNumber) - 1], version)
-    }
-  }, { root: bodyRef.value, rootMargin: '900px 0px', threshold: 0.01 })
-  for (const entry of continuousEntries) continuousObserver.observe(entry.slot)
-  const targetEntry = continuousEntries[targetPage - 1]
-  if (targetEntry && bodyRef.value) bodyRef.value.scrollTop = Math.max(0, targetEntry.slot.offsetTop - 16)
-  renderContinuousPage(targetEntry, version)
-  renderContinuousPage(continuousEntries[targetPage], version)
-  if (targetEntry?.renderPromise) await targetEntry.renderPromise
-  updateContinuousPageNumber()
-}
-
-const destroyPdf = async () => {
-  try { await cancelRender() } catch (_) {}
-  await cancelContinuousRender()
-  const task = loadingTask
-  loadingTask = null
-  const document = pdfDoc.value
-  pdfDoc.value = null
-  if (task) {
-    try { await task.destroy() } catch (_) {}
-  } else if (document) {
-    try { await document.destroy() } catch (_) {}
-  }
-  numPages.value = 0
-  selectableTextCount.value = 0
-}
-
-const renderPage = async () => {
-  if (!pdfDoc.value || !canvasRef.value) return
-  closeExplanation(true)
-  selectableTextCount.value = 0
-  await cancelRender()
-  const page = await pdfDoc.value.getPage(pageNum.value)
-  const viewport = page.getViewport({ scale: zoom.value })
-  const canvas = canvasRef.value
-  const dpr = window.devicePixelRatio || 1
-  canvas.width = Math.ceil(viewport.width * dpr)
-  canvas.height = Math.ceil(viewport.height * dpr)
-  canvas.style.width = `${viewport.width}px`
-  canvas.style.height = `${viewport.height}px`
-  const surface = pageSurfaceRef.value
-  surface.style.width = `${viewport.width}px`
-  surface.style.height = `${viewport.height}px`
-  const layerContainer = textLayerRef.value
-  layerContainer.replaceChildren()
-  const params = { canvasContext: canvas.getContext('2d'), viewport }
-  if (dpr !== 1) params.transform = [dpr, 0, 0, dpr, 0, 0]
-  const task = page.render(params)
-  renderTask = task
-  const currentTextLayer = new pdfjsLib.TextLayer({
-    textContentSource: page.streamTextContent({ includeMarkedContent: true, disableNormalization: true }),
-    container: layerContainer,
-    viewport,
-  })
-  textLayer = currentTextLayer
-  try {
-    await Promise.all([task.promise, currentTextLayer.render()])
-    selectableTextCount.value = currentTextLayer.textContentItemsStr.join('').trim().length
-  } catch (exception) {
-    if (!isRenderCancellation(exception)) throw exception
-  } finally {
-    if (renderTask === task) renderTask = null
-    if (textLayer === currentTextLayer) textLayer = null
-  }
-}
-
-const renderCurrentMode = async () => {
-  if (readingMode.value === 'continuous') await prepareContinuousPages()
-  else await renderPage()
-}
-
-const fitToWidth = async () => {
-  if (!pdfDoc.value || !bodyRef.value) return
-  const page = await pdfDoc.value.getPage(readingMode.value === 'continuous' ? 1 : pageNum.value)
-  const base = page.getViewport({ scale: 1 })
-  // 两种模式使用同一内容宽度，切换时不改变缩放比例或造成画布横向跳动。
-  const horizontalSpace = 48
-  zoom.value = Math.max(0.5, Math.min(3, +((bodyRef.value.clientWidth - horizontalSpace) / base.width).toFixed(2)))
-  await renderCurrentMode()
-}
-
-const showRenderError = (exception) => {
-  if (!isRenderCancellation(exception)) {
-    error.value = exception?.message || '页面渲染失败'
-  }
-}
-
-const goPage = async (value) => {
-  if (readingMode.value !== 'paged' || value < 1 || value > numPages.value) return
-  pageNum.value = value
-  try { await renderPage() } catch (exception) { showRenderError(exception) }
-}
-
-const zoomBy = async (delta) => {
-  zoom.value = Math.min(3, Math.max(0.5, +(zoom.value + delta).toFixed(2)))
-  try { await renderCurrentMode() } catch (exception) { showRenderError(exception) }
-}
-
-const fitWidth = async () => {
-  try { await fitToWidth() } catch (exception) { showRenderError(exception) }
-}
-
-const changeReadingMode = async mode => {
-  if (!pdfDoc.value) return
-  localStorage.setItem(READING_MODE_KEY, mode)
-  closeExplanation(true)
-  loading.value = true
-  loadingText.value = mode === 'continuous' ? '正在准备长文阅读…' : '正在准备分页阅读…'
-  try {
-    await nextTick()
-    if (mode === 'paged') {
-      await cancelContinuousRender()
-      if (bodyRef.value) bodyRef.value.scrollTop = 0
-    }
-    // 阅读模式只改变页面组织方式，保留当前缩放比例可避免切换时画面二次缩放。
-    await renderCurrentMode()
-  } catch (exception) {
-    showRenderError(exception)
-  } finally {
-    loading.value = false
-  }
 }
 
 const load = async () => {
+  cancelReadingProgress()
+  highlightLoadSequence += 1
   closeExplanation(true)
+  closeHighlightDetail()
+  clearSourceHighlight()
+  clearPersistentHighlightRanges()
+  clearHighlights()
+  closeDocumentSearch()
   explanationCache.clear()
   const version = ++loadVersion
   abortController?.abort()
@@ -771,6 +987,7 @@ const load = async () => {
   error.value = ''
   loading.value = true
   loadingText.value = '加载中...'
+  const restoration = sourcePositionToRestore()
   await destroyPdf()
   if (docxRef.value) docxRef.value.innerHTML = ''
   try {
@@ -779,27 +996,48 @@ const load = async () => {
       if (version !== loadVersion) return
       // DOCX altChunk can contain active HTML. Never grant uploaded documents
       // application-origin execution privileges.
-      await renderAsync(buffer, docxRef.value, null, {
+      // Render off-DOM first. An obsolete render must never write into the
+      // live container after a newer load has cleared or replaced it.
+      const staging = document.createElement('div')
+      await renderAsync(buffer, staging, null, {
         inWrapper: true,
         renderAltChunks: false,
         renderComments: false,
       })
-      hardenDocxDom(docxRef.value)
+      if (version !== loadVersion) return
+      hardenDocxDom(staging)
+      const container = docxRef.value
+      if (version !== loadVersion || !container) return
+      container.replaceChildren(...staging.childNodes)
+      await nextTick()
+      if (version !== loadVersion) return
+      await loadHighlights()
+      if (version !== loadVersion) return
+      await restoreSourcePosition(restoration)
     } else {
       const task = pdfjsLib.getDocument({ url: activeUrl.value, withCredentials: true })
-      loadingTask = task
+      setPdfLoadingTask(task)
       const document = await task.promise
+      clearPdfLoadingTask(task)
       if (version !== loadVersion) {
         await document.destroy()
         return
       }
-      loadingTask = null
       pdfDoc.value = document
       numPages.value = document.numPages
-      pageNum.value = 1
+      const restoreAnchor = restoration?.anchor
+      const canPreselectPage = isSourceAnchor(restoreAnchor)
+        && Number(restoreAnchor.document_id) === Number(props.model.id)
+        && restoreAnchor.document_version === contentVersion.value
+        && restoreAnchor.source_format === 'pdf'
+      pageNum.value = canPreselectPage
+        ? Math.min(Math.max(restoreAnchor.page, 1), document.numPages)
+        : 1
       await nextTick()
       if (bodyRef.value) bodyRef.value.scrollTop = 0
       await fitToWidth()
+      await loadHighlights()
+      await restoreSourcePosition(restoration)
     }
   } catch (exception) {
     if (version === loadVersion && exception?.name !== 'AbortError' && !isRenderCancellation(exception)) {
@@ -812,49 +1050,60 @@ const load = async () => {
   }
 }
 
-watch(() => [props.model.id, props.model.url, props.model.engine], () => {
-  ocrStatus.value = props.model.ocrStatus || 'not_applicable'
-  ocrError.value = props.model.ocrError || ''
-  activeUrl.value = ocrStatus.value === 'ready'
-    ? versionedUrl(props.model.url, props.model.ocrUpdatedAt)
-    : props.model.url
-  scheduleOcrPoll()
+watch(() => [props.model.id, props.model.url, props.model.engine, props.model.contentVersion, props.model.ocrUpdatedAt], () => {
+  syncOcr(props.model)
   load()
 }, { immediate: true })
+
+watch(() => props.initialAnchor, async anchor => {
+  if (!anchor || loading.value) return
+  const signature = JSON.stringify(anchor)
+  if (signature === appliedInitialAnchor) return
+  appliedInitialAnchor = signature
+  await jumpToAnchor(anchor)
+}, { deep: true })
 
 onMounted(() => {
   bodyRef.value?.addEventListener('mouseup', captureSelection)
   bodyRef.value?.addEventListener('touchend', captureSelection)
   bodyRef.value?.addEventListener('keyup', captureSelection)
+  bodyRef.value?.addEventListener('click', handleHighlightClick)
   bodyRef.value?.addEventListener('scroll', handleBodyScroll, { passive: true })
   document.addEventListener('pointerdown', handleDocumentPointerDown, true)
   window.addEventListener('resize', closeExplanation)
   resizeObserver = new ResizeObserver(() => {
     clearTimeout(resizeTimer)
     resizeTimer = setTimeout(() => {
-      if (pdfDoc.value) fitWidth()
+      if (pdfDoc.value && !loading.value) fitWidth()
     }, 120)
   })
   if (bodyRef.value) resizeObserver.observe(bodyRef.value)
 })
 
 onBeforeUnmount(() => {
+  if (!loading.value) flushReadingProgress()
   loadVersion += 1
   abortController?.abort()
   clearTimeout(resizeTimer)
-  clearOcrTimer()
+  cancelReadingProgress()
+  stopOcr()
   resizeObserver?.disconnect()
   bodyRef.value?.removeEventListener('mouseup', captureSelection)
   bodyRef.value?.removeEventListener('touchend', captureSelection)
   bodyRef.value?.removeEventListener('keyup', captureSelection)
+  bodyRef.value?.removeEventListener('click', handleHighlightClick)
   bodyRef.value?.removeEventListener('scroll', handleBodyScroll)
   explainController?.abort()
+  closeDocumentSearch()
+  highlightLoadSequence += 1
+  clearSourceHighlight()
+  clearPersistentHighlightRanges()
   document.removeEventListener('pointerdown', handleDocumentPointerDown, true)
   window.removeEventListener('resize', closeExplanation)
   destroyPdf()
 })
 
-defineExpose({ reload: load })
+defineExpose({ reload: load, jumpToAnchor })
 </script>
 
 <style scoped>
@@ -863,11 +1112,14 @@ defineExpose({ reload: load })
   display: flex;
   flex-direction: column;
   height: 100%;
-  min-height: 400px;
+  min-width: 0;
+  min-height: 0;
+  box-sizing: border-box;
   background: #fff;
   border-radius: 14px;
   border: 1px solid rgba(0, 69, 183, .06);
   overflow: hidden;
+  contain: layout paint;
 }
 .reader-toolbar {
   display: flex;
@@ -896,6 +1148,16 @@ defineExpose({ reload: load })
   justify-content: flex-end;
   min-height: 32px;
 }
+.reader-highlight-button {
+  min-width: 76px;
+}
+.reader-search-box {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 248px;
+}
+.reader-search-box :deep(.el-input) { min-width: 0; }
 .reader-selection-hint {
   width: 190px;
   justify-content: center;
@@ -912,9 +1174,12 @@ defineExpose({ reload: load })
 }
 .reader-body {
   flex: 1;
+  min-width: 0;
+  min-height: 0;
   overflow: auto;
   scrollbar-gutter: stable;
   overscroll-behavior: contain; /* 触底/触顶不再把滚动传给外层页面 */
+  overflow-anchor: none;
   background: #eef6fa;
   position: relative;
 }
@@ -1037,6 +1302,13 @@ defineExpose({ reload: load })
   background: rgba(48, 218, 212, .34);
 }
 .reader-continuous :deep(.textLayer ::selection) { background: rgba(48, 218, 212, .34); }
+:global(::highlight(iknowread-source-anchor)) {
+  background: rgba(255, 193, 7, .52);
+}
+:global(::highlight(iknowread-persistent-highlights)) {
+  background: rgba(255, 213, 71, .64);
+  text-decoration: underline rgba(197, 136, 0, .72) 1px;
+}
 .reader-docx {
   background: #fff;
   max-width: 900px;
@@ -1046,6 +1318,9 @@ defineExpose({ reload: load })
   border-radius: 2px;
 }
 .reader-docx:focus { outline: none; }
+@media (max-width: 760px) {
+  .reader-search-box { width: 100%; }
+}
 .reader-floating-pagination {
   position: absolute;
   z-index: 12;
@@ -1116,202 +1391,4 @@ defineExpose({ reload: load })
   color: var(--ik-text-sub);
 }
 
-.selection-explain {
-  position: fixed;
-  z-index: 4000;
-  width: min(380px, calc(100vw - 24px));
-  max-height: min(560px, calc(100vh - 24px));
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  color: var(--ik-text);
-  background: rgba(255, 255, 255, .98);
-  border: 1px solid rgba(0, 150, 180, .24);
-  border-radius: 14px;
-  box-shadow: 0 16px 44px rgba(0, 56, 157, .2);
-  backdrop-filter: blur(10px);
-  animation: selection-explain-in .16s ease-out;
-}
-.selection-explain-header,
-.selection-explain-footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-.selection-explain-header {
-  padding: 12px 14px;
-  border-bottom: 1px solid var(--ik-border);
-  background: linear-gradient(135deg, #f3f9ff, #edfcfb);
-}
-.selection-explain-title {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 14px;
-  font-weight: 700;
-  color: #24384c;
-}
-.selection-explain-mark {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 22px;
-  color: #fff;
-  font-size: 11px;
-  letter-spacing: .3px;
-  border-radius: 7px;
-  background: var(--ik-gradient);
-}
-.selection-icon-button,
-.selection-explain-footer button,
-.selection-explain-error button {
-  border: 0;
-  background: transparent;
-  color: var(--ik-blue);
-  font: inherit;
-  cursor: pointer;
-}
-.selection-icon-button {
-  display: inline-flex;
-  padding: 5px;
-  border-radius: 7px;
-  color: var(--ik-text-sub);
-}
-.selection-icon-button:hover { background: rgba(0, 69, 183, .08); }
-.selection-quote {
-  flex-shrink: 0;
-  margin: 12px 14px 0;
-  padding: 9px 11px;
-  color: var(--ik-text-sub);
-  font-size: 12px;
-  line-height: 1.55;
-  background: #f5f9fc;
-  border-left: 3px solid var(--ik-cyan);
-  border-radius: 4px 8px 8px 4px;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-.selection-explain-loading,
-.selection-explain-error,
-.selection-explain-answer {
-  min-height: 80px;
-  padding: 14px;
-  font-size: 14px;
-  line-height: 1.75;
-}
-.selection-explain-loading {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 9px;
-  color: var(--ik-cyan-deep);
-}
-.selection-explain-error {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 8px;
-  color: var(--el-color-danger);
-}
-.selection-explain-error button { padding: 0; font-size: 13px; }
-.selection-explain-answer {
-  overflow-y: auto;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-.selection-explain-footer {
-  flex-shrink: 0;
-  padding: 9px 14px;
-  color: var(--ik-text-sub);
-  font-size: 11px;
-  border-top: 1px solid var(--ik-border);
-}
-.selection-model {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.selection-footer-actions {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-.selection-explain-footer button {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 4px 0;
-  font-size: 12px;
-}
-.selection-explain-footer button:disabled {
-  opacity: .55;
-  cursor: wait;
-}
-.selection-explain-footer .note-saved { color: #148064; }
-.selection-note-compose {
-  flex-shrink: 0;
-  padding: 12px 14px;
-  background: #f7fbfd;
-  border-top: 1px solid var(--ik-border);
-}
-.selection-note-compose label {
-  display: block;
-  margin-bottom: 7px;
-  color: #33475e;
-  font-size: 12px;
-  font-weight: 600;
-}
-.selection-note-compose textarea {
-  width: 100%;
-  resize: vertical;
-  min-height: 70px;
-  max-height: 140px;
-  padding: 9px 10px;
-  color: var(--ik-text);
-  font: inherit;
-  font-size: 13px;
-  line-height: 1.55;
-  background: #fff;
-  border: 1px solid #cfe2ee;
-  border-radius: 8px;
-  outline: none;
-}
-.selection-note-compose textarea:focus { border-color: var(--ik-cyan-deep); box-shadow: 0 0 0 2px rgba(0, 150, 180, .1); }
-.selection-note-compose > div {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 10px;
-  margin-top: 7px;
-}
-.selection-note-compose > div span { margin-right: auto; color: var(--ik-text-sub); font-size: 10px; }
-.selection-note-compose button {
-  padding: 4px 0;
-  color: var(--ik-blue);
-  font: inherit;
-  font-size: 12px;
-  background: transparent;
-  border: 0;
-  cursor: pointer;
-}
-.selection-note-compose button.primary {
-  padding: 6px 10px;
-  color: #fff;
-  background: var(--ik-gradient);
-  border-radius: 7px;
-}
-.selection-note-compose button:disabled { opacity: .6; cursor: wait; }
-@media (max-width: 520px) {
-  .selection-explain-footer { align-items: flex-start; flex-direction: column; gap: 7px; }
-  .selection-footer-actions { width: 100%; justify-content: space-between; }
-}
-@keyframes selection-explain-in {
-  from { opacity: 0; transform: translateY(5px) scale(.98); }
-  to { opacity: 1; transform: translateY(0) scale(1); }
-}
 </style>

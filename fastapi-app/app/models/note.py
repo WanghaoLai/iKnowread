@@ -3,7 +3,7 @@ from tortoise.models import Model
 
 
 class Note(Model):
-    id = fields.IntField(pk=True)
+    id = fields.IntField(primary_key=True)
     account = fields.ForeignKeyField(
         "models.Account", related_name="notes", on_delete=fields.CASCADE
     )
@@ -11,6 +11,8 @@ class Note(Model):
         "models.Document", related_name="notes", null=True, on_delete=fields.SET_NULL
     )
     document_name = fields.CharField(max_length=255, null=True)
+    document_version = fields.CharField(max_length=32, null=True)
+    source_anchor = fields.JSONField(null=True)
     source_type = fields.CharField(max_length=30, default="manual")
     title = fields.CharField(max_length=200)
     selected_text = fields.TextField(null=True)

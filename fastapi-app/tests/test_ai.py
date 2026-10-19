@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from app import create_app
 from app.config import settings
 from app.dependencies import CurrentAccount, get_current_account
-from app.models import Account, AIConfig
+from app.models import Account, AIConfig, Document
 from app.services import ai_service
 
 
@@ -38,6 +38,10 @@ class AITests(unittest.IsolatedAsyncioTestCase):
         await Tortoise.generate_schemas()
         self.user = await Account.create(username="ai-test", name="测试", password="unused", role="user")
         self.admin = await Account.create(username="ai-admin", name="管理员", password="unused", role="admin")
+        self.document = await Document.create(
+            name="示例文档.pdf", ext="pdf", size=100,
+            path="files/download/user/1/example.pdf", account_id=self.user.id,
+        )
         self.app = create_app()
         self.as_account(self.user)
         self.client = httpx.AsyncClient(transport=httpx.ASGITransport(app=self.app), base_url="http://test")
@@ -58,6 +62,21 @@ class AITests(unittest.IsolatedAsyncioTestCase):
         response = await self.client.put("/ai/config", json=self.payload)
         self.assertEqual(response.status_code, 200, response.text)
         return response
+
+    def source_anchor(self, text="第一性原理", *, version=None, source_format="pdf"):
+        return {
+            "protocol": "iknowread.source-anchor/v1",
+            "document_id": self.document.id,
+            "document_version": version or self.document.content_version,
+            "source_format": source_format,
+            "scope": "page" if source_format == "pdf" else "document",
+            "page": 2 if source_format == "pdf" else None,
+            "progression": 0.2,
+            "selector": {
+                "position": {"start": 10, "end": 10 + len(text)},
+                "quote": {"exact": text, "prefix": "理解", "suffix": "方法"},
+            },
+        }
 
     def upstream(self, handler):
         upstream_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
@@ -339,16 +358,58 @@ class AITests(unittest.IsolatedAsyncioTestCase):
 
         with self.upstream(handler):
             response = await self.client.post("/ai/explain", json={
+                "source_anchor": self.source_anchor(),
                 "content": "第一性原理",
-                "document_title": "示例文档.pdf",
             })
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["data"]["content"], "从基本事实出发推导。")
+        self.assertEqual(response.json()["data"]["source_anchor"]["page"], 2)
 
     async def test_explain_validation(self):
         await self.save()
-        for payload in [{}, {"content": ""}, {"content": "x" * 4001}, {"content": "词", "extra": True}]:
+        valid = {
+            "source_anchor": self.source_anchor(text="词"),
+            "content": "词",
+        }
+        for payload in [
+            {}, {**valid, "content": ""}, {**valid, "content": "x" * 4001},
+            {**valid, "extra": True},
+            {**valid, "source_anchor": {**self.source_anchor(text="词"), "document_version": "invalid"}},
+            {**valid, "source_anchor": {**self.source_anchor(text="词"), "selector": None}},
+            {**valid, "content": "另一段文字"},
+        ]:
             self.assertEqual((await self.client.post("/ai/explain", json=payload)).status_code, 422)
+
+    async def test_explain_rejects_stale_and_midflight_document_versions(self):
+        await self.save()
+        wrong_format = await self.client.post("/ai/explain", json={
+            "source_anchor": self.source_anchor(source_format="docx"),
+            "content": "第一性原理",
+        })
+        self.assertEqual(wrong_format.status_code, 409, wrong_format.text)
+
+        old_version = self.document.content_version
+        self.document.content_version = "a" * 32
+        await self.document.save(update_fields=["content_version"])
+        stale = await self.client.post("/ai/explain", json={
+            "source_anchor": self.source_anchor(text="旧选文", version=old_version),
+            "content": "旧选文",
+        })
+        self.assertEqual(stale.status_code, 409, stale.text)
+
+        current_version = self.document.content_version
+
+        async def complete_and_replace(*args, **kwargs):
+            await Document.filter(id=self.document.id).update(content_version="b" * 32)
+            return {"content": "已经过期的回答"}
+
+        with patch.object(ai_service, "complete", side_effect=complete_and_replace):
+            raced = await self.client.post("/ai/explain", json={
+                "source_anchor": self.source_anchor(text="处理中选文", version=current_version),
+                "content": "处理中选文",
+            })
+        self.assertEqual(raced.status_code, 409, raced.text)
+        self.assertNotIn("已经过期的回答", raced.text)
 
     async def test_upstream_errors_are_safe_and_actionable(self):
         await self.save()

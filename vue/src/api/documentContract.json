@@ -1,0 +1,13 @@
+{
+  "list": { "method": "GET", "path": "/documents" },
+  "upload": { "method": "POST", "path": "/documents" },
+  "delete": { "method": "DELETE", "path": "/documents/{doc_id}" },
+  "preview": { "method": "GET", "path": "/documents/{doc_id}/preview" },
+  "download": { "method": "GET", "path": "/documents/{doc_id}/download" },
+  "ocr": { "method": "POST", "path": "/documents/{doc_id}/ocr" },
+  "ocr_status": { "method": "GET", "path": "/documents/{doc_id}/ocr-status" },
+  "processing_status": { "method": "GET", "path": "/documents/{doc_id}/processing-status" },
+  "recycle_list": { "method": "GET", "path": "/documents/recycle-bin" },
+  "restore": { "method": "POST", "path": "/documents/recycle-bin/{doc_id}/restore" },
+  "purge": { "method": "DELETE", "path": "/documents/recycle-bin/{doc_id}" }
+}

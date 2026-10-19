@@ -16,7 +16,7 @@ async def add(payload: AccountCreate, _=Depends(require_admin)):
 
 @router.put("/{account_id}")
 async def update(account_id: int, payload: AccountUpdate, current: CurrentAccount = Depends(get_current_account)):
-    account = await account_service.get_by_id(account_id)
+    await account_service.get_by_id(account_id)
     require_self_or_admin(current, account_id)
     updated = await account_service.update(account_id, payload.model_dump(exclude_unset=True))
     return Result.success(AccountPublic.model_validate(updated))

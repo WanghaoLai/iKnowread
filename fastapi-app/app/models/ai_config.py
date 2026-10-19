@@ -3,7 +3,7 @@ from tortoise.models import Model
 
 
 class AIConfig(Model):
-    id = fields.IntField(pk=True)
+    id = fields.IntField(primary_key=True)
     account = fields.ForeignKeyField("models.Account", related_name="ai_configs", on_delete=fields.CASCADE)
     provider = fields.CharField(max_length=20, default="deepseek")
     name = fields.CharField(max_length=100)

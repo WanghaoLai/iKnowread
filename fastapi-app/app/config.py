@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # 项目根目录：fastapi-app/（app/config.py 的上两级）
@@ -15,18 +16,19 @@ class Settings(BaseSettings):
 
     # 服务
     APP_NAME: str = "iKnowread"
-    HOST: str = "0.0.0.0"
+    HOST: str = "127.0.0.1"
     PORT: int = 9090
-    DEBUG: bool = True
+    DEBUG: bool = False
 
     # 认证：生产环境必须显式配置；开发环境留空时使用进程级临时密钥
     AUTH_SECRET: str = ""
     AI_CONFIG_KEY: str = ""  # Fernet 密钥；留空时自动生成并持久化到 data/.ai-config-key
     DEFAULT_ADMIN_USERNAME: str = "admin"
     DEFAULT_ADMIN_PASSWORD: str = ""
-    ALLOW_REGISTRATION: bool = True
+    ALLOW_REGISTRATION: bool = False
     AUTH_RATE_WINDOW_SECONDS: int = 60
     LOGIN_RATE_LIMIT: int = 10
+    PASSWORD_CHANGE_RATE_LIMIT: int = 5
     CAPTCHA_RATE_LIMIT: int = 30
     CAPTCHA_TTL_SECONDS: int = 120
     REGISTER_RATE_LIMIT: int = 3
@@ -36,16 +38,21 @@ class Settings(BaseSettings):
     # 数据库
     DB_HOST: str = "localhost"
     DB_PORT: int = 3306
-    DB_USER: str = "root"
-    DB_PASSWORD: str = "123456"
+    DB_USER: str = "iknowread"
+    DB_PASSWORD: str = ""
     DB_DATABASE: str = "iknowread"
-    DB_AUTO_CREATE: bool = True      # 启动时自动创建数据库
+    DB_AUTO_CREATE: bool = False     # 开发环境可在本地 .env 中显式启用
     DB_ECHO: bool = False
+    INSTANCE_LOCK_HEARTBEAT_SECONDS: float = 15.0
 
     # 文件存储
     UPLOAD_DIR: str = ""                              # 留空 = 项目根下 data/files
     USER_STORAGE_QUOTA_BYTES: int = 2 * 1024 * 1024 * 1024
     USER_DOCUMENT_LIMIT: int = 200
+    USER_TOTAL_DOCUMENT_LIMIT: int = 400
+    USER_NOTE_LIMIT: int = 10000
+    USER_HIGHLIGHT_LIMIT: int = 10000
+    DOCUMENT_HIGHLIGHT_LIMIT: int = 1000
     STORAGE_MIN_FREE_BYTES: int = 2 * 1024 * 1024 * 1024
     UPLOAD_CONCURRENCY: int = 3
     UPLOAD_QUEUE_WAIT_SECONDS: float = 1.0
@@ -74,7 +81,16 @@ class Settings(BaseSettings):
     NOTE_EXPORT_MAX_BYTES: int = 20 * 1024 * 1024
 
     # 跨域
-    CORS_ORIGINS: str = "*"                           # 逗号分隔多个源
+    CORS_ORIGINS: str = ""                            # 逗号分隔多个源
+
+    @field_validator("DB_DATABASE")
+    @classmethod
+    def validate_database_name(cls, value: str) -> str:
+        # MySQL does not support binding an identifier as a query parameter.
+        # Restrict the configured identifier before it is quoted in CREATE DATABASE.
+        if not value or len(value) > 64 or not all(character.isalnum() or character == "_" for character in value):
+            raise ValueError("DB_DATABASE 只能包含字母、数字和下划线，且不能超过 64 个字符")
+        return value
 
     @property
     def data_dir(self) -> Path:
