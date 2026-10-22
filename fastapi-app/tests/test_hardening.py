@@ -25,7 +25,7 @@ import app.routers.document as document_router
 import app.routers.files as files_router
 from app import create_app
 from app import database
-from app.api_paths import DOCUMENT_UPLOAD_PATH, UPLOAD_PATHS
+from app.api_paths import API_CONTRACT, DOCUMENT_UPLOAD_PATH, UPLOAD_PATHS
 from app.config import Settings, settings
 from app.dependencies import CurrentAccount, get_current_account
 from app.migrations.v001_unify_accounts import (
@@ -33,7 +33,11 @@ from app.migrations.v001_unify_accounts import (
     _prepare_legacy_password,
 )
 from app.migrations.runner import migration_checksum
-from app.migrations import v014_remove_placeholder_processing_tasks
+from app.migrations import (
+    v015_markdown_documents,
+    v016_web_imports,
+    v017_web_import_lifecycle,
+)
 from app.models import Account, Document, Note
 from app.schemas.document import DocumentPublic
 from app.schemas.account import normalize_username
@@ -173,22 +177,22 @@ class ConfigurationTests(unittest.TestCase):
     def test_document_public_schema_does_not_expose_storage_path(self):
         self.assertNotIn("path", DocumentPublic.model_fields)
 
-    def test_frontend_document_contract_matches_backend_routes(self):
+    def test_frontend_api_contract_matches_backend_routes(self):
         app = create_app()
         contract_path = (
             Path(__file__).resolve().parents[2]
-            / "vue/src/api/documentContract.json"
+            / "vue/src/api/apiContract.json"
         )
         contract = json.loads(contract_path.read_text(encoding="utf-8"))
+        self.assertEqual(contract, API_CONTRACT)
         expected = {(entry["path"], entry["method"]) for entry in contract.values()}
         actual = {
             (path, method.upper())
             for path, operations in app.openapi()["paths"].items()
-            if path == DOCUMENT_UPLOAD_PATH or path.startswith(f"{DOCUMENT_UPLOAD_PATH}/")
             for method in operations
             if method in {"get", "post", "put", "patch", "delete"}
         }
-        self.assertEqual(actual, expected)
+        self.assertTrue(expected.issubset(actual), expected - actual)
 
     def test_database_identifier_rejects_sql_syntax(self):
         with self.assertRaises(ValueError):
@@ -212,11 +216,43 @@ class ConfigurationTests(unittest.TestCase):
             source.write_text("VERSION = 1\nNAME = 'changed'\n", encoding="utf-8")
             self.assertNotEqual(first, migration_checksum(migration))
 
-    def test_latest_processing_task_migration_is_registered(self):
+    def test_latest_migration_is_registered(self):
         from app.migrations.runner import MIGRATIONS
 
-        self.assertIs(MIGRATIONS[-1], v014_remove_placeholder_processing_tasks)
-        self.assertEqual(v014_remove_placeholder_processing_tasks.VERSION, 14)
+        self.assertIs(MIGRATIONS[-1], v017_web_import_lifecycle)
+        self.assertEqual(v016_web_imports.VERSION, 16)
+        self.assertEqual(v017_web_import_lifecycle.VERSION, 17)
+
+
+class _MarkdownMigrationConnection:
+    def __init__(self, constraint_exists=True):
+        self.constraint_exists = constraint_exists
+        self.executed = []
+
+    async def execute_query_dict(self, _query, _params=None):
+        return [{"1": 1}] if self.constraint_exists else []
+
+    async def execute_query(self, query):
+        self.executed.append(query)
+
+
+class MarkdownMigrationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_document_format_constraint_is_replaced_with_markdown_support(self):
+        connection = _MarkdownMigrationConnection()
+
+        await v015_markdown_documents.upgrade(connection)
+
+        self.assertEqual(len(connection.executed), 2)
+        self.assertIn("DROP CHECK `ck_document_ext`", connection.executed[0])
+        self.assertIn("CHECK (`ext` IN ('pdf', 'docx', 'md'))", connection.executed[1])
+
+    async def test_missing_document_format_constraint_is_created(self):
+        connection = _MarkdownMigrationConnection(constraint_exists=False)
+
+        await v015_markdown_documents.upgrade(connection)
+
+        self.assertEqual(len(connection.executed), 1)
+        self.assertIn("CHECK (`ext` IN ('pdf', 'docx', 'md'))", connection.executed[0])
 
 
 class _InstanceLockCursor:
@@ -351,8 +387,63 @@ class HardeningAPITests(unittest.IsolatedAsyncioTestCase):
         docx = await self.client.post(
             "/documents", files={"file": ("fake.docx", b"not a zip", "application/octet-stream")}
         )
+        markdown = await self.client.post(
+            "/documents", files={"file": ("fake.md", b"\xff\xfe\x00\x00", "text/markdown")}
+        )
         self.assertEqual(pdf.status_code, 400, pdf.text)
         self.assertEqual(docx.status_code, 400, docx.text)
+        self.assertEqual(markdown.status_code, 400, markdown.text)
+        self.assertEqual(await Document.all().count(), 0)
+
+    async def test_markdown_upload_download_and_annotation_round_trip(self):
+        content = "# 第一性原理\n\nMarkdown **正文**与中文内容。\n".encode()
+        uploaded = await self.client.post(
+            "/documents",
+            files={"file": ("thinking.md", content, "text/markdown")},
+        )
+        self.assertEqual(uploaded.status_code, 200, uploaded.text)
+        document = uploaded.json()["data"]
+        self.assertEqual(document["ext"], "md")
+        self.assertEqual(document["ocr_status"], "not_applicable")
+
+        downloaded = await self.client.get(
+            f"/documents/{document['id']}/download",
+            params={"version": document["content_version"]},
+        )
+        self.assertEqual(downloaded.status_code, 200, downloaded.text)
+        self.assertEqual(downloaded.content, content)
+        self.assertTrue(downloaded.headers["content-type"].startswith("text/markdown"))
+
+        highlighted = await self.client.post(
+            "/highlights",
+            json={
+                "document_id": document["id"],
+                "source_anchor": {
+                    "protocol": "iknowread.source-anchor/v1",
+                    "document_id": document["id"],
+                    "document_version": document["content_version"],
+                    "source_format": "md",
+                    "scope": "document",
+                    "page": None,
+                    "progression": 0,
+                    "selector": {
+                        "position": {"start": 0, "end": 5},
+                        "quote": {"exact": "第一性原理", "prefix": "", "suffix": ""},
+                    },
+                },
+                "selected_text": "第一性原理",
+                "remark": "Markdown 高亮",
+            },
+        )
+        self.assertEqual(highlighted.status_code, 200, highlighted.text)
+
+    async def test_markdown_size_limit_is_enforced_while_validating_content(self):
+        with patch.object(settings, "MARKDOWN_MAX_BYTES", 8):
+            response = await self.client.post(
+                "/documents",
+                files={"file": ("large.md", b"123456789", "text/markdown")},
+            )
+        self.assertEqual(response.status_code, 413, response.text)
         self.assertEqual(await Document.all().count(), 0)
 
     async def test_disabled_ocr_has_terminal_status_and_no_polling_state(self):

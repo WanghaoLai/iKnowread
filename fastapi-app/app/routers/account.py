@@ -1,11 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 
+from app.api_paths import ACCOUNTS_ITEM_ROUTE, ACCOUNTS_PREFIX
 from app.common.result import PageInfo, Result
 from app.dependencies import CurrentAccount, get_current_account, require_admin, require_self_or_admin
 from app.schemas.account import AccountCreate, AccountPublic, AccountUpdate
 from app.services import account_service
 
-router = APIRouter(prefix="/accounts")
+router = APIRouter(prefix=ACCOUNTS_PREFIX)
 
 
 @router.post("")
@@ -14,7 +15,7 @@ async def add(payload: AccountCreate, _=Depends(require_admin)):
     return Result.success(AccountPublic.model_validate(account))
 
 
-@router.put("/{account_id}")
+@router.put(ACCOUNTS_ITEM_ROUTE)
 async def update(account_id: int, payload: AccountUpdate, current: CurrentAccount = Depends(get_current_account)):
     await account_service.get_by_id(account_id)
     require_self_or_admin(current, account_id)
@@ -22,7 +23,7 @@ async def update(account_id: int, payload: AccountUpdate, current: CurrentAccoun
     return Result.success(AccountPublic.model_validate(updated))
 
 
-@router.delete("/{account_id}")
+@router.delete(ACCOUNTS_ITEM_ROUTE)
 async def delete(account_id: int, current: CurrentAccount = Depends(require_admin)):
     if current.id == account_id:
         raise HTTPException(status_code=400, detail="不能删除当前登录账号")
@@ -30,7 +31,7 @@ async def delete(account_id: int, current: CurrentAccount = Depends(require_admi
     return Result.success()
 
 
-@router.get("/{account_id}")
+@router.get(ACCOUNTS_ITEM_ROUTE)
 async def select_one(account_id: int, current: CurrentAccount = Depends(get_current_account)):
     account = await account_service.get_by_id(account_id)
     require_self_or_admin(current, account_id)

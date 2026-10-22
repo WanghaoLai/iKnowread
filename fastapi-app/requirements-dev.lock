@@ -1,3 +1,5 @@
-# Static-analysis tooling used by deploy/release-check.sh. Keep this separate
-# from the production runtime image and pin it for reproducible release gates.
+# Quality-gate tooling used by deploy/release-check.sh. Keep this separate from
+# the production runtime image and pin it for reproducible release checks.
 ruff==0.16.5
+mypy==1.18.2
+coverage==7.10.7

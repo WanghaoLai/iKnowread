@@ -21,6 +21,10 @@ class Document(Model):
     ocr_error = fields.CharField(max_length=500, null=True)
     ocr_updated_at = fields.DatetimeField(null=True)
     deleted_at = fields.DatetimeField(null=True)
+    source_type = fields.CharField(max_length=10, default="local")
+    source_url = fields.CharField(max_length=2048, null=True)
+    source_title = fields.CharField(max_length=500, null=True)
+    source_fetched_at = fields.DatetimeField(null=True)
     account = fields.ForeignKeyField(
         "models.Account", related_name="documents", on_delete=fields.CASCADE
     )

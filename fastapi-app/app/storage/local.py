@@ -109,10 +109,15 @@ class LocalStorage(StorageBackend):
             self._remove_empty_parents(path.parent)
 
     def iter_keys(self, prefix: str = "") -> list[str]:
+        return list(self.iter_keys_iter(prefix))
+
+    def iter_keys_iter(self, prefix: str = ""):
         base = self._path(prefix) if prefix else self._root
         if not base.exists():
-            return []
-        return [path.relative_to(self._root).as_posix() for path in base.rglob("*") if path.is_file()]
+            return
+        for path in base.rglob("*"):
+            if path.is_file():
+                yield path.relative_to(self._root).as_posix()
 
     def modified_at(self, key: str) -> datetime:
         return datetime.fromtimestamp(self._path(key).stat().st_mtime, timezone.utc)

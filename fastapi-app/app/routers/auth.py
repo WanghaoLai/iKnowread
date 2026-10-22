@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
+from app.api_paths import api_path
 from app.common.result import Result
 from app.config import settings
 from app.dependencies import CurrentAccount, get_current_account
@@ -11,7 +12,7 @@ from app.services.auth_guard import limit_auth
 router = APIRouter()
 
 
-@router.get("/captcha")
+@router.get(api_path("auth.captcha"))
 async def captcha(request: Request, response: Response):
     await limit_auth(request, "captcha")
     response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
@@ -19,13 +20,13 @@ async def captcha(request: Request, response: Response):
     return Result.success(await captcha_service.issue())
 
 
-@router.get("/me")
+@router.get(api_path("auth.me"))
 async def me(current: CurrentAccount = Depends(get_current_account)):
     return Result.success(AccountPublic.model_validate(current.account))
 
 
 # 登录
-@router.post("/login")
+@router.post(api_path("auth.login"))
 async def login(account: LoginRequest, response: Response, request: Request):
     await limit_auth(request, "login", account.username)
     await captcha_service.verify(account.captcha_id, account.captcha_code)
@@ -48,7 +49,7 @@ async def login(account: LoginRequest, response: Response, request: Request):
     return Result.success(AccountPublic.model_validate(logged_in))
 
 
-@router.post("/logout")
+@router.post(api_path("auth.logout"))
 async def logout(
     response: Response,
     current: CurrentAccount = Depends(get_current_account),
@@ -61,7 +62,7 @@ async def logout(
 
 
 # 注册
-@router.post("/register")
+@router.post(api_path("auth.register"))
 async def register(account: RegisterRequest, request: Request):
     if not settings.ALLOW_REGISTRATION:
         raise HTTPException(status_code=403, detail="当前系统未开放自助注册，请联系管理员创建账号")
@@ -71,7 +72,7 @@ async def register(account: RegisterRequest, request: Request):
 
 
 # 修改密码
-@router.put("/password")
+@router.put(api_path("auth.password"))
 async def update_password(
     account: PasswordUpdateRequest,
     response: Response,

@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from pydantic import field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # 项目根目录：fastapi-app/（app/config.py 的上两级）
@@ -58,7 +58,33 @@ class Settings(BaseSettings):
     UPLOAD_QUEUE_WAIT_SECONDS: float = 1.0
     DOCX_MAX_ENTRIES: int = 2000
     DOCX_MAX_UNCOMPRESSED_BYTES: int = 200 * 1024 * 1024
+    MARKDOWN_MAX_BYTES: int = 5 * 1024 * 1024
     PDF_MAX_PAGES: int = 1000
+
+    # URL 网页收藏：只有后端可访问 crawler 的内部 API。
+    CRAWLER_ENABLED: bool = False
+    CRAWLER_BASE_URL: str = "http://crawler:11235"
+    CRAWLER_API_TOKEN: str = ""
+    CRAWLER_TIMEOUT_SECONDS: int = 180
+    CRAWLER_MAX_RESPONSE_BYTES: int = 12 * 1024 * 1024
+    # One backend process owns the in-memory dispatch queue. Each worker claims
+    # a durable pending row with a conditional update, so 1-4 workers can run
+    # concurrently without processing the same job twice.
+    WEB_IMPORT_WORKERS: int = Field(default=1, ge=1, le=4)
+    # 防滥用：每账号窗口期内创建次数、同时排队（pending+processing）任务数、单任务总尝试次数
+    WEB_IMPORT_RATE_LIMIT: int = 5
+    WEB_IMPORT_RATE_WINDOW_SECONDS: int = 60
+    WEB_IMPORT_PENDING_LIMIT: int = 5
+    WEB_IMPORT_MAX_ATTEMPTS: int = 3
+    WEB_IMPORT_QUEUE_SIZE: int = 100
+    WEB_IMPORT_RECOVERY_BATCH_SIZE: int = 100
+    WEB_IMPORT_RETENTION_DAYS: int = 30
+    WEB_IMPORT_CLEANUP_BATCH_SIZE: int = 100
+
+    # 存储对账在后台增量执行，启动链路不等待文件树扫描。
+    STORAGE_RECONCILE_INTERVAL_SECONDS: int = 60 * 60
+    STORAGE_RECONCILE_ACCOUNT_BATCH_SIZE: int = 100
+    STORAGE_RECONCILE_TRASH_BATCH_SIZE: int = 100
 
     # PDF OCR：OCRmyPDF 负责生成带隐藏文字层的派生 PDF，原文件始终保留
     OCR_ENABLED: bool = False

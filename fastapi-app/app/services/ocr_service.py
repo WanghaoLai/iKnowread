@@ -321,8 +321,8 @@ async def process_document(doc_id: int) -> None:
             await asyncio.to_thread(_copy_source_to, storage_key(doc), source)
             try:
                 return_code, stderr = await _run_command(source, output)
-            except asyncio.TimeoutError:
-                raise RuntimeError("OCR timeout")
+            except asyncio.TimeoutError as exc:
+                raise RuntimeError("OCR timeout") from exc
             if return_code != 0 or not output.is_file() or output.stat().st_size == 0:
                 safe_error = _safe_error(stderr)
                 logger.warning(

@@ -31,6 +31,10 @@ def prune_account_slots(active_account_ids: set[int]) -> None:
         del _account_slots[account_id]
 
 
+def cached_account_slot_ids() -> set[int]:
+    return set(_account_slots)
+
+
 @asynccontextmanager
 async def ai_request_slot(account_id: int):
     global_slot = _global()

@@ -1,0 +1,218 @@
+{
+  "accounts.create": {
+    "method": "POST",
+    "path": "/accounts"
+  },
+  "accounts.delete": {
+    "method": "DELETE",
+    "path": "/accounts/{account_id}"
+  },
+  "accounts.get": {
+    "method": "GET",
+    "path": "/accounts/{account_id}"
+  },
+  "accounts.list": {
+    "method": "GET",
+    "path": "/accounts"
+  },
+  "accounts.update": {
+    "method": "PUT",
+    "path": "/accounts/{account_id}"
+  },
+  "ai.activate_config": {
+    "method": "POST",
+    "path": "/ai/configs/{config_id}/activate"
+  },
+  "ai.active_config": {
+    "method": "GET",
+    "path": "/ai/config"
+  },
+  "ai.chat": {
+    "method": "POST",
+    "path": "/ai/chat"
+  },
+  "ai.config_models": {
+    "method": "GET",
+    "path": "/ai/configs/{config_id}/models"
+  },
+  "ai.configs": {
+    "method": "GET",
+    "path": "/ai/configs"
+  },
+  "ai.create_config": {
+    "method": "POST",
+    "path": "/ai/configs"
+  },
+  "ai.delete_config": {
+    "method": "DELETE",
+    "path": "/ai/configs/{config_id}"
+  },
+  "ai.explain": {
+    "method": "POST",
+    "path": "/ai/explain"
+  },
+  "ai.providers": {
+    "method": "GET",
+    "path": "/ai/providers"
+  },
+  "ai.save_active_config": {
+    "method": "PUT",
+    "path": "/ai/config"
+  },
+  "ai.test": {
+    "method": "POST",
+    "path": "/ai/test"
+  },
+  "ai.test_saved_config": {
+    "method": "POST",
+    "path": "/ai/configs/{config_id}/test"
+  },
+  "ai.update_config": {
+    "method": "PUT",
+    "path": "/ai/configs/{config_id}"
+  },
+  "auth.captcha": {
+    "method": "GET",
+    "path": "/captcha"
+  },
+  "auth.login": {
+    "method": "POST",
+    "path": "/login"
+  },
+  "auth.logout": {
+    "method": "POST",
+    "path": "/logout"
+  },
+  "auth.me": {
+    "method": "GET",
+    "path": "/me"
+  },
+  "auth.password": {
+    "method": "PUT",
+    "path": "/password"
+  },
+  "auth.register": {
+    "method": "POST",
+    "path": "/register"
+  },
+  "documents.delete": {
+    "method": "DELETE",
+    "path": "/documents/{doc_id}"
+  },
+  "documents.download": {
+    "method": "GET",
+    "path": "/documents/{doc_id}/download"
+  },
+  "documents.list": {
+    "method": "GET",
+    "path": "/documents"
+  },
+  "documents.ocr": {
+    "method": "POST",
+    "path": "/documents/{doc_id}/ocr"
+  },
+  "documents.ocr_status": {
+    "method": "GET",
+    "path": "/documents/{doc_id}/ocr-status"
+  },
+  "documents.preview": {
+    "method": "GET",
+    "path": "/documents/{doc_id}/preview"
+  },
+  "documents.processing_status": {
+    "method": "GET",
+    "path": "/documents/{doc_id}/processing-status"
+  },
+  "documents.purge": {
+    "method": "DELETE",
+    "path": "/documents/recycle-bin/{doc_id}"
+  },
+  "documents.recycle_list": {
+    "method": "GET",
+    "path": "/documents/recycle-bin"
+  },
+  "documents.restore": {
+    "method": "POST",
+    "path": "/documents/recycle-bin/{doc_id}/restore"
+  },
+  "documents.upload": {
+    "method": "POST",
+    "path": "/documents"
+  },
+  "files.upload": {
+    "method": "POST",
+    "path": "/files/upload"
+  },
+  "highlights.create": {
+    "method": "POST",
+    "path": "/highlights"
+  },
+  "highlights.delete": {
+    "method": "DELETE",
+    "path": "/highlights/{highlight_id}"
+  },
+  "highlights.list": {
+    "method": "GET",
+    "path": "/highlights"
+  },
+  "highlights.update": {
+    "method": "PUT",
+    "path": "/highlights/{highlight_id}"
+  },
+  "meta.capabilities": {
+    "method": "GET",
+    "path": "/capabilities"
+  },
+  "notes.create": {
+    "method": "POST",
+    "path": "/notes"
+  },
+  "notes.delete": {
+    "method": "DELETE",
+    "path": "/notes/{note_id}"
+  },
+  "notes.export": {
+    "method": "POST",
+    "path": "/notes/export"
+  },
+  "notes.export_query": {
+    "method": "GET",
+    "path": "/notes/export"
+  },
+  "notes.list": {
+    "method": "GET",
+    "path": "/notes"
+  },
+  "notes.summary": {
+    "method": "GET",
+    "path": "/notes/summary"
+  },
+  "notes.update": {
+    "method": "PUT",
+    "path": "/notes/{note_id}"
+  },
+  "web_imports.cancel": {
+    "method": "POST",
+    "path": "/web-imports/{job_id}/cancel"
+  },
+  "web_imports.create": {
+    "method": "POST",
+    "path": "/web-imports"
+  },
+  "web_imports.delete": {
+    "method": "DELETE",
+    "path": "/web-imports/{job_id}"
+  },
+  "web_imports.get": {
+    "method": "GET",
+    "path": "/web-imports/{job_id}"
+  },
+  "web_imports.list": {
+    "method": "GET",
+    "path": "/web-imports"
+  },
+  "web_imports.retry": {
+    "method": "POST",
+    "path": "/web-imports/{job_id}/retry"
+  }
+}

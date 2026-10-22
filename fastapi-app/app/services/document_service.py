@@ -13,7 +13,7 @@ from app.services import processing_task_service
 from app.storage import complete_on_cancellation, get_storage, run_storage_io
 from tortoise.transactions import in_transaction
 
-ALLOWED_EXTS = {"pdf", "docx"}
+ALLOWED_EXTS = {"pdf", "docx", "md"}
 MAX_SIZE = 50 * 1024 * 1024
 logger = logging.getLogger(__name__)
 
@@ -84,7 +84,7 @@ async def upload(account_id: int, role: str, file: UploadFile) -> dict:
     name = file.filename or ""
     ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
     if ext not in ALLOWED_EXTS:
-        raise CustomException("不支持的文件格式，仅支持 PDF / DOCX")
+        raise CustomException("不支持的文件格式，仅支持 PDF / DOCX / Markdown")
     if file.size and file.size > MAX_SIZE:
         raise CustomException("文件大小不能超过 50MB", status_code=413)
     await validate_document(file, ext)

@@ -2,6 +2,19 @@ import json
 
 from fastapi import APIRouter, Depends
 
+from app.api_paths import (
+    AI_CHAT_ROUTE,
+    AI_CONFIG_ACTIVATE_ROUTE,
+    AI_CONFIG_ITEM_ROUTE,
+    AI_CONFIG_MODELS_ROUTE,
+    AI_CONFIG_ROUTE,
+    AI_CONFIG_TEST_ROUTE,
+    AI_CONFIGS_ROUTE,
+    AI_EXPLAIN_ROUTE,
+    AI_PREFIX,
+    AI_PROVIDERS_ROUTE,
+    AI_TEST_ROUTE,
+)
 from app.common.exception_handler import CustomException
 from app.common.result import Result
 from app.dependencies import CurrentAccount, get_current_account, require_document_owner
@@ -10,77 +23,77 @@ from app.schemas.ai import AIConfigSave, ChatRequest, ExplainRequest
 from app.services import ai_service
 from app.services.ai_providers import provider_catalog
 
-router = APIRouter(prefix="/ai", tags=["智能助手"])
+router = APIRouter(prefix=AI_PREFIX, tags=["智能助手"])
 
 
-@router.get("/config")
+@router.get(AI_CONFIG_ROUTE)
 async def read_config(current: CurrentAccount = Depends(get_current_account)):
     config = await AIConfig.filter(account_id=current.id, is_active=True).first()
     return Result.success(ai_service.public_config(config))
 
 
-@router.get("/providers")
+@router.get(AI_PROVIDERS_ROUTE)
 async def read_providers(current: CurrentAccount = Depends(get_current_account)):
     return Result.success(provider_catalog())
 
 
-@router.get("/configs")
+@router.get(AI_CONFIGS_ROUTE)
 async def read_configs(current: CurrentAccount = Depends(get_current_account)):
     return Result.success(await ai_service.list_configs(current.id))
 
 
-@router.post("/configs")
+@router.post(AI_CONFIGS_ROUTE)
 async def create_config(payload: AIConfigSave, current: CurrentAccount = Depends(get_current_account)):
     return Result.success(await ai_service.create_config(current.id, payload))
 
 
-@router.put("/configs/{config_id}")
+@router.put(AI_CONFIG_ITEM_ROUTE)
 async def update_config(config_id: int, payload: AIConfigSave, current: CurrentAccount = Depends(get_current_account)):
     return Result.success(await ai_service.update_config(current.id, config_id, payload))
 
 
-@router.delete("/configs/{config_id}")
+@router.delete(AI_CONFIG_ITEM_ROUTE)
 async def delete_config(config_id: int, current: CurrentAccount = Depends(get_current_account)):
     return Result.success(await ai_service.delete_config(current.id, config_id))
 
 
-@router.post("/configs/{config_id}/activate")
+@router.post(AI_CONFIG_ACTIVATE_ROUTE)
 async def activate_config(config_id: int, current: CurrentAccount = Depends(get_current_account)):
     return Result.success(await ai_service.activate_config(current.id, config_id))
 
 
-@router.post("/configs/{config_id}/test")
+@router.post(AI_CONFIG_TEST_ROUTE)
 async def test_saved_config(config_id: int, current: CurrentAccount = Depends(get_current_account)):
     config = await ai_service._owned_config(current.id, config_id)
     await ai_service.complete(config, [{"role": "user", "content": "请只回复：连接成功"}], test=True)
     return Result.success({"message": f"连接成功，{config.name} 可以正常回答"})
 
 
-@router.get("/configs/{config_id}/models")
+@router.get(AI_CONFIG_MODELS_ROUTE)
 async def discover_config_models(config_id: int, current: CurrentAccount = Depends(get_current_account)):
     config = await ai_service._owned_config(current.id, config_id)
     return Result.success(await ai_service.discover_models(config))
 
 
-@router.put("/config")
+@router.put(AI_CONFIG_ROUTE)
 async def save_config(payload: AIConfigSave, current: CurrentAccount = Depends(get_current_account)):
     return Result.success(await ai_service.save_config(current.id, payload))
 
 
-@router.post("/test")
+@router.post(AI_TEST_ROUTE)
 async def test_config(current: CurrentAccount = Depends(get_current_account)):
     config = await ai_service.get_config(current.id)
     await ai_service.complete(config, [{"role": "user", "content": "请只回复：连接成功"}], test=True)
     return Result.success({"message": "连接成功，当前模型可以正常回答"})
 
 
-@router.post("/chat")
+@router.post(AI_CHAT_ROUTE)
 async def chat(payload: ChatRequest, current: CurrentAccount = Depends(get_current_account)):
     config = await ai_service.get_config(current.id)
     return Result.success(await ai_service.complete(config, [message.model_dump() for message in payload.messages]))
 
 
-@router.post("/explain")
+@router.post(AI_EXPLAIN_ROUTE)
 async def explain(payload: ExplainRequest, current: CurrentAccount = Depends(get_current_account)):
     anchor = payload.source_anchor
     document = await Document.get_or_none(id=anchor.document_id, deleted_at__isnull=True)

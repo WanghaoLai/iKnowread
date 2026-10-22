@@ -71,7 +71,8 @@
 
 <script setup>
 // 用户/管理员共用同一个账号资源，仅角色筛选条件不同。
-import request, { notifyRequestError } from "@/utils/request";
+import { createAccount, deleteAccount, listAccounts, updateAccount } from '@/api/accounts'
+import { notifyRequestError } from '@/utils/request'
 import { uploadAvatar } from "@/api/files";
 import { fileUrl, avatarUploadHandlers } from "@/utils/file";
 import { Search, Refresh, Plus, Edit, Delete, Upload, Check } from "@element-plus/icons-vue";
@@ -117,15 +118,12 @@ const data = reactive({
 
 // 分页查询
 const { loading, load: loadList } = useListLoader(
-  () => request.get('/accounts', {
-    skipErrorToast: true,
-    params: {
+  () => listAccounts({
       role: props.role,
       pageNum: data.pageNum,
       pageSize: data.pageSize,
       name: data.name,
-    },
-  }),
+    }, { skipErrorToast: true }),
   { onError: error => notifyRequestError(error, '账号列表加载失败，请重试') },
 )
 
@@ -150,14 +148,14 @@ const handleEdit = (row) => {
 
 // 新增保存
 const add = async () => {
-  return request.post('/accounts', { ...data.form, role: props.role }, {
+  return createAccount({ ...data.form, role: props.role }, {
     skipErrorToast: true,
   })
 }
 
 // 编辑保存
 const update = async () => {
-  return request.put('/accounts/' + data.form.id, {
+  return updateAccount(data.form.id, {
     name: data.form.name,
     avatar: data.form.avatar || null,
   }, {
@@ -196,7 +194,7 @@ const handleDelete = async (id) => {
     return
   }
   try {
-    const res = await request.delete('/accounts/' + id, { skipErrorToast: true })
+    const res = await deleteAccount(id, { skipErrorToast: true })
     if (res.code === '200') {
       ElMessage.success('操作成功')
       await load()

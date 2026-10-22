@@ -100,6 +100,26 @@ async def main() -> None:
             )
             assert (await cursor.fetchone())[0] == 4, "数据约束不完整"
             await cursor.execute(
+                "SELECT COUNT(*) FROM information_schema.COLUMNS "
+                "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='document' "
+                "AND COLUMN_NAME IN ('source_type','source_url','source_title','source_fetched_at')"
+            )
+            assert (await cursor.fetchone())[0] == 4, "文档缺少网页来源字段"
+            await cursor.execute(
+                "SELECT COUNT(*) FROM information_schema.TABLE_CONSTRAINTS "
+                "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='web_import_job' "
+                "AND CONSTRAINT_NAME IN "
+                "('fk_web_import_account','fk_web_import_document','ck_web_import_status')"
+            )
+            assert (await cursor.fetchone())[0] == 3, "网页收藏任务约束不完整"
+            await cursor.execute(
+                "SELECT COUNT(*) FROM information_schema.CHECK_CONSTRAINTS "
+                "WHERE CONSTRAINT_SCHEMA=DATABASE() "
+                "AND CONSTRAINT_NAME='ck_web_import_status' "
+                "AND CHECK_CLAUSE LIKE '%canceled%'"
+            )
+            assert (await cursor.fetchone())[0] == 1, "网页收藏任务状态不支持取消"
+            await cursor.execute(
                 "SELECT COUNT(*) FROM information_schema.STATISTICS "
                 "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='document' "
                 "AND INDEX_NAME='ux_document_path' AND NON_UNIQUE=0"

@@ -21,7 +21,8 @@
 
 <script setup>
 import {reactive, ref} from "vue"
-import request, { notifyRequestError } from "@/utils/request";
+import { updatePassword } from '@/api/auth'
+import { notifyRequestError } from '@/utils/request'
 import { Check } from "@element-plus/icons-vue";
 import {ElMessage} from "element-plus";
 import router from "@/router";
@@ -60,7 +61,7 @@ const save = async () => {
       ElMessage.error('确认新密码错误')
       return
     }
-    const res = await request.put('/password', {
+    const res = await updatePassword({
       password: data.user.password,
       newPassword: data.user.newPassword,
     }, {

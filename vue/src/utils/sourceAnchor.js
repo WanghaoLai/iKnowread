@@ -10,7 +10,7 @@ export function isSourceAnchor(anchor) {
   if (!anchor || anchor.protocol !== SOURCE_ANCHOR_PROTOCOL) return false
   if (!Number.isInteger(Number(anchor.document_id)) || Number(anchor.document_id) < 1) return false
   if (!/^[0-9a-f]{32}$/.test(anchor.document_version || '')) return false
-  if (!['pdf', 'docx'].includes(anchor.source_format)) return false
+  if (!['pdf', 'docx', 'md'].includes(anchor.source_format)) return false
   if (!Number.isFinite(anchor.progression) || anchor.progression < 0 || anchor.progression > 1) return false
   if (anchor.source_format === 'pdf') {
     if (anchor.scope !== 'page' || !Number.isInteger(anchor.page) || anchor.page < 1) return false
@@ -84,7 +84,7 @@ function rangeAtOffsets(root, start, end) {
   let endNode = null
   let endOffset = 0
   for (const node of nodes) {
-    const next = consumed + node.data.length
+    const next = consumed + (node.nodeValue || '').length
     if (!startNode && start >= consumed && start <= next) {
       startNode = node
       startOffset = start - consumed

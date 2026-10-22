@@ -1,4 +1,5 @@
 import request from '@/utils/request'
+import { apiPath } from './apiPaths.js'
 
 export function uploadAvatar({ file, data = {}, onProgress }) {
   const body = new FormData()
@@ -7,7 +8,7 @@ export function uploadAvatar({ file, data = {}, onProgress }) {
   }
   body.append('file', file, file.name)
 
-  return request.post('/files/upload', body, {
+  return request.post(apiPath('files.upload'), body, {
     skipErrorToast: true,
     onUploadProgress(event) {
       if (!onProgress) return

@@ -3,12 +3,13 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Query, Response
 
+from app.api_paths import NOTES_EXPORT_ROUTE, NOTES_ITEM_ROUTE, NOTES_PREFIX, NOTES_SUMMARY_ROUTE
 from app.common.result import PageInfo, Result
 from app.dependencies import CurrentAccount, get_current_account
 from app.schemas.note import NoteCreate, NoteExportRequest, NoteUpdate
 from app.services import note_service
 
-router = APIRouter(prefix="/notes")
+router = APIRouter(prefix=NOTES_PREFIX)
 
 
 def _export_response(content: str, download_name: str = "我的笔记.md") -> Response:
@@ -41,12 +42,12 @@ async def select_page(
     return Result.success(PageInfo(**page))
 
 
-@router.get("/summary")
+@router.get(NOTES_SUMMARY_ROUTE)
 async def summary(current: CurrentAccount = Depends(get_current_account)):
     return Result.success(await note_service.summary(current.id))
 
 
-@router.get("/export")
+@router.get(NOTES_EXPORT_ROUTE)
 async def export_notes(
     keyword: str = "",
     document_id: int | None = Query(default=None, alias="documentId", ge=1),
@@ -61,7 +62,7 @@ async def export_notes(
     return _export_response(content)
 
 
-@router.post("/export")
+@router.post(NOTES_EXPORT_ROUTE)
 async def export_notes_by_scope(
     payload: NoteExportRequest,
     current: CurrentAccount = Depends(get_current_account),
@@ -91,7 +92,7 @@ async def create_note(
     return Result.success(await note_service.create(current, payload))
 
 
-@router.put("/{note_id}")
+@router.put(NOTES_ITEM_ROUTE)
 async def update_note(
     note_id: int,
     payload: NoteUpdate,
@@ -100,7 +101,7 @@ async def update_note(
     return Result.success(await note_service.update(current.id, note_id, payload))
 
 
-@router.delete("/{note_id}")
+@router.delete(NOTES_ITEM_ROUTE)
 async def delete_note(
     note_id: int,
     current: CurrentAccount = Depends(get_current_account),

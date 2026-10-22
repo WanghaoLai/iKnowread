@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 from datetime import datetime
+from collections.abc import Iterable
 from typing import BinaryIO
 
 from starlette.responses import Response
@@ -43,6 +44,9 @@ class StorageBackend(ABC):
 
     @abstractmethod
     def iter_keys(self, prefix: str = "") -> list[str]: ...
+
+    @abstractmethod
+    def iter_keys_iter(self, prefix: str = "") -> Iterable[str]: ...
 
     @abstractmethod
     def modified_at(self, key: str) -> datetime: ...

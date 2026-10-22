@@ -6,14 +6,16 @@ from tortoise import Tortoise
 from app.common.result import Result
 from app.config import settings
 from app.database import verify_instance_lock
-from app.routers import account, ai, auth, document, files, highlights, notes
+from app.routers import account, ai, auth, document, files, highlights, notes, web_imports
 from app.services import ocr_service
+from app.services import crawler_client
 from app.storage import run_storage_io
 
 api_router = APIRouter()
 for router in (
     auth.router, account.router, document.router, files.router, ai.router,
     notes.router, highlights.router,
+    web_imports.router,
 ):
     api_router.include_router(router)
 
@@ -51,8 +53,11 @@ async def ready():
 @api_router.get("/capabilities")
 async def capabilities():
     ocr_error = ocr_service.availability_error()
+    crawler_error = await crawler_client.runtime_availability_error()
     return Result.success({
         "registration_enabled": settings.ALLOW_REGISTRATION,
         "ocr_enabled": ocr_error is None,
         "ocr_error": ocr_error,
+        "web_import_enabled": crawler_error is None,
+        "web_import_error": crawler_error,
     })

@@ -54,7 +54,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ChatDotRound, Loading, Promotion } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import request from '@/utils/request'
+import { activateAiConfig, chatWithAi, getActiveAiConfig, listAiConfigs } from '@/api/ai'
 import { getSession } from '@/utils/session'
 import { fileUrl, DEFAULT_AVATAR } from '@/utils/file'
 import botAvatar from '@/assets/imgs/logo.png'
@@ -81,7 +81,7 @@ async function load() {
   loading.value = true
   loadError.value = false
   try {
-    const [activeResponse, configsResponse] = await Promise.all([request.get('/ai/config'), request.get('/ai/configs')])
+    const [activeResponse, configsResponse] = await Promise.all([getActiveAiConfig(), listAiConfigs()])
     config.value = activeResponse.data
     configs.value = configsResponse.data || []
     currentConfigId.value = config.value?.id || null
@@ -112,7 +112,7 @@ async function switchConfig(configId) {
   if (!configId || configId === config.value?.id) return
   switching.value = true
   try {
-    const { data } = await request.post(`/ai/configs/${configId}/activate`)
+    const { data } = await activateAiConfig(configId)
     config.value = data
     configs.value = configs.value.map(item => ({ ...item, is_active: item.id === configId }))
     newChat()
@@ -137,7 +137,7 @@ async function send() {
   controller = new AbortController()
   scrollToEnd()
   try {
-    const { data } = await request.post('/ai/chat', { messages: [...history, { role: 'user', content }] }, { timeout: 135000, signal: controller.signal })
+    const { data } = await chatWithAi({ messages: [...history, { role: 'user', content }] }, { timeout: 135000, signal: controller.signal })
     messages.value.push({ role: 'assistant', ...data })
   } catch (error) {
     messages.value.pop()

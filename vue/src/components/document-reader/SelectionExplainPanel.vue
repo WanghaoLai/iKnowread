@@ -33,7 +33,7 @@
             maxlength="12000"
             rows="4"
             placeholder="AI 解释会自动填入，也可以修改为自己的理解"
-            @input="$emit('update-highlight-remark', $event.target.value)"
+            @input="$emit('update-highlight-remark', eventValue($event))"
         ></textarea>
         <div>
           <span>{{ selectionHighlight.remark.length }} / 12000</span>
@@ -52,7 +52,7 @@
             maxlength="5000"
             rows="3"
             placeholder="记录你的理解、疑问或下一步行动"
-            @input="$emit('update-note-remark', $event.target.value)"
+            @input="$emit('update-note-remark', eventValue($event))"
         ></textarea>
         <div>
           <span>{{ explain.noteRemark.length }} / 5000</span>
@@ -111,6 +111,7 @@ defineEmits([
 ])
 
 const root = ref()
+const eventValue = event => event.target instanceof HTMLTextAreaElement ? event.target.value : ''
 defineExpose({ element: root })
 </script>
 

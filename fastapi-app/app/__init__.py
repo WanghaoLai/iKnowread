@@ -23,8 +23,9 @@ from app.services.auth_service import (
     start_legacy_password_migration,
     stop_legacy_password_migration,
 )
-from app.services.storage_service import reconcile_storage, start_periodic_cleanup, stop_periodic_cleanup
+from app.services.storage_service import start_periodic_cleanup, stop_periodic_cleanup
 from app.services import ocr_service
+from app.services import web_import_service
 from app.upload_guard import UploadConcurrencyMiddleware
 
 
@@ -64,12 +65,15 @@ async def lifespan(app: FastAPI):
     try:
         await seed_default_admin()
         start_legacy_password_migration()
-        await reconcile_storage()
-        start_periodic_cleanup()
+        # Reconciliation may traverse large account trees. It starts in the
+        # background so readiness depends only on transactional core services.
+        start_periodic_cleanup(run_immediately=True)
         await ocr_service.start()
+        await web_import_service.start()
         yield
     finally:
         await stop_legacy_password_migration()
+        await web_import_service.stop()
         await ocr_service.stop()
         await stop_periodic_cleanup()
         await stop_instance_lock_monitor()

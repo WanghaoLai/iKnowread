@@ -1,11 +1,12 @@
 from fastapi import APIRouter, Depends, Query
 
+from app.api_paths import HIGHLIGHTS_ITEM_ROUTE, HIGHLIGHTS_PREFIX
 from app.common.result import Result
 from app.dependencies import CurrentAccount, get_current_account
 from app.schemas.highlight import HighlightCreate, HighlightUpdate
 from app.services import highlight_service
 
-router = APIRouter(prefix="/highlights")
+router = APIRouter(prefix=HIGHLIGHTS_PREFIX)
 
 
 @router.get("")
@@ -29,7 +30,7 @@ async def create_highlight(
     return Result.success(await highlight_service.create(current, payload))
 
 
-@router.put("/{highlight_id}")
+@router.put(HIGHLIGHTS_ITEM_ROUTE)
 async def update_highlight(
     highlight_id: int,
     payload: HighlightUpdate,
@@ -40,7 +41,7 @@ async def update_highlight(
     )
 
 
-@router.delete("/{highlight_id}")
+@router.delete(HIGHLIGHTS_ITEM_ROUTE)
 async def delete_highlight(
     highlight_id: int,
     current: CurrentAccount = Depends(get_current_account),

@@ -21,6 +21,10 @@ def account_lock(account_id: int) -> asyncio.Lock:
     return _account_locks[account_id]
 
 
+def cached_account_lock_ids() -> set[int]:
+    return set(_account_locks)
+
+
 def prune_account_locks(active_account_ids: set[int]) -> None:
     """回收已删除账号的进程内锁，避免字典随账号更替无限增长。
 

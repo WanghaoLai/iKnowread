@@ -329,9 +329,9 @@ class AITests(unittest.IsolatedAsyncioTestCase):
         self.payload["thinking"] = True
         await self.save()
         for route in ["/ai/chat", "/ai/test"]:
-            def handler(request):
+            def handler(request, current_route=route):
                 body = json.loads(request.content)
-                if route.endswith("test"):
+                if current_route.endswith("test"):
                     self.assertEqual(body["max_tokens"], 32)
                     self.assertEqual(body["thinking"], {"type": "disabled"})
                 else:
@@ -414,7 +414,7 @@ class AITests(unittest.IsolatedAsyncioTestCase):
     async def test_upstream_errors_are_safe_and_actionable(self):
         await self.save()
         for status, expected in [(401, "API Key"), (402, "余额"), (429, "频率"), (500, "暂时不可用"), (302, "暂时不可用")]:
-            with self.upstream(lambda request: httpx.Response(status, text="sensitive-upstream-debug")):
+            with self.upstream(lambda request, current_status=status: httpx.Response(current_status, text="sensitive-upstream-debug")):
                 response = await self.client.post("/ai/test")
             self.assertEqual(response.status_code, 502)
             self.assertIn(expected, response.text)
@@ -423,7 +423,7 @@ class AITests(unittest.IsolatedAsyncioTestCase):
     async def test_malformed_empty_and_timeout_responses(self):
         await self.save()
         for result in [{}, {"choices": []}, {"choices": [{"message": {"content": ""}}]}, {"choices": None}]:
-            with self.upstream(lambda request: httpx.Response(200, json=result)):
+            with self.upstream(lambda request, current_result=result: httpx.Response(200, json=current_result)):
                 self.assertEqual((await self.client.post("/ai/test")).status_code, 502)
         def timeout(request):
             raise httpx.ReadTimeout("timeout")

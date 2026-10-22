@@ -58,7 +58,7 @@
           <h2>{{ !loading && !data.total ? '还没有可阅读的文档' : '选择一份文档开始阅读' }}</h2>
           <p>{{ !loading && !data.total ? '请先上传文档，上传完成后即可在这里开始阅读。' : '从左侧“我的文档”列表中选择文件，文档内容将在此处打开。' }}</p>
           <div v-if="data.total" class="reader-guide" aria-label="阅读操作提示">
-            <div><span>1</span><p><strong>选择阅读方式</strong>PDF 支持分页阅读和长文连续阅读，并可缩放或适应宽度。</p></div>
+            <div><span>1</span><p><strong>选择阅读方式</strong>PDF 支持分页或连续阅读，DOCX 与 Markdown 以长文方式展示。</p></div>
             <div><span>2</span><p><strong>搜索与定位</strong>搜索文档内容，阅读进度会自动保存，再次打开可继续阅读。</p></div>
             <div><span>3</span><p><strong>划词辅助阅读</strong>选择字、词、句或段落，可获取 AI 解释并保存为笔记或高亮备注。</p></div>
           </div>

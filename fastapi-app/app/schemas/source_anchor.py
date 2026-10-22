@@ -51,7 +51,7 @@ class SourceAnchor(BaseModel):
     document_version: str = Field(
         min_length=32, max_length=32, pattern=r"^[0-9a-f]{32}$"
     )
-    source_format: Literal["pdf", "docx"]
+    source_format: Literal["pdf", "docx", "md"]
     scope: Literal["page", "document"]
     page: int | None = Field(default=None, ge=1)
     progression: float = Field(default=0, ge=0, le=1)
@@ -61,6 +61,8 @@ class SourceAnchor(BaseModel):
     def format_scope(self):
         if self.source_format == "pdf" and (self.scope != "page" or self.page is None):
             raise ValueError("PDF 定位必须包含页码并使用 page 范围")
-        if self.source_format == "docx" and (self.scope != "document" or self.page is not None):
-            raise ValueError("DOCX 定位必须使用 document 范围且不包含页码")
+        if self.source_format in {"docx", "md"} and (
+            self.scope != "document" or self.page is not None
+        ):
+            raise ValueError("长文档定位必须使用 document 范围且不包含页码")
         return self

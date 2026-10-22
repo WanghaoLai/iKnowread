@@ -18,3 +18,15 @@ test('document search respects its result limit', () => {
   const results = collectDocumentMatches('a a a a', 'a', source, { limit: 2 })
   assert.equal(results.length, 2)
 })
+
+test('document search creates document-scoped Markdown anchors', () => {
+  const results = collectDocumentMatches(
+    'Markdown 正文可搜索',
+    '正文',
+    { ...source, sourceFormat: 'md' },
+  )
+  assert.equal(results.length, 1)
+  assert.equal(results[0].anchor.source_format, 'md')
+  assert.equal(results[0].anchor.scope, 'document')
+  assert.equal(results[0].anchor.page, null)
+})

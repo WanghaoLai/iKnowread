@@ -1,61 +1,86 @@
 import asyncio
+from itertools import islice
 import logging
 from datetime import datetime, timedelta, timezone
 
+from app.config import settings
 from app.models import Account, Document
 from app.services.account_service import RELATIVE_PREFIX
-from app.services.ai_guard import prune_account_slots
-from app.services.resource_limits import prune_account_locks
+from app.services.ai_guard import cached_account_slot_ids, prune_account_slots
+from app.services.resource_limits import cached_account_lock_ids, prune_account_locks
 from app.storage import get_storage, run_storage_io
 
 logger = logging.getLogger(__name__)
 _cleanup_task: asyncio.Task | None = None
+_reconcile_lock = asyncio.Lock()
 
 
 def _remove_stale_unreferenced(storage, prefixes, referenced, cutoff) -> None:
     for prefix in prefixes:
-        for key in storage.iter_keys(prefix):
+        for key in storage.iter_keys_iter(prefix):
             if key not in referenced and storage.modified_at(key) < cutoff:
                 storage.delete(key)
 
 
 async def reconcile_storage() -> None:
-    """Recover interrupted deletes and remove stale managed uploads."""
-    storage = get_storage()
-    await _recover_staged_deletes()
-    # 账号删除后回收其进程内锁与 AI 信号量，防止长期运行时缓慢增长。
-    active_account_ids = set(await Account.all().values_list("id", flat=True))
-    prune_account_locks(active_account_ids)
-    prune_account_slots(active_account_ids)
+    """Incrementally reconcile storage with bounded in-memory working sets."""
+    async with _reconcile_lock:
+        storage = get_storage()
+        await _recover_staged_deletes()
+        cached_ids = cached_account_lock_ids() | cached_account_slot_ids()
+        active_cached_ids = set()
+        if cached_ids:
+            active_cached_ids = set(
+                await Account.filter(id__in=cached_ids).values_list("id", flat=True)
+            )
+        prune_account_locks(active_cached_ids)
+        prune_account_slots(active_cached_ids)
 
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
-    referenced = {
-        path[len(RELATIVE_PREFIX):]
-        for path in await Document.all().values_list("path", flat=True)
-        if path and path.startswith(RELATIVE_PREFIX)
-    }
-    referenced.update(
-        path[len(RELATIVE_PREFIX):]
-        for path in await Document.exclude(ocr_path=None).values_list("ocr_path", flat=True)
-        if path and path.startswith(RELATIVE_PREFIX)
-    )
-    referenced.update(
-        avatar[len(RELATIVE_PREFIX):]
-        for avatar in await Account.exclude(avatar=None).values_list("avatar", flat=True)
-        if avatar and avatar.startswith(RELATIVE_PREFIX)
-    )
-    await run_storage_io(
-        _remove_stale_unreferenced,
-        storage,
-        ("temp", "admin", "user"),
-        referenced,
-        cutoff,
-    )
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+        batch_size = max(1, settings.STORAGE_RECONCILE_ACCOUNT_BATCH_SIZE)
+        cursor = 0
+        while True:
+            accounts = await Account.filter(id__gt=cursor).order_by("id").limit(
+                batch_size
+            ).values("id", "role", "avatar")
+            if not accounts:
+                break
+            for account in accounts:
+                account_id = int(account["id"])
+                referenced: set[str] = set()
+                avatar = account.get("avatar")
+                if avatar and avatar.startswith(RELATIVE_PREFIX):
+                    referenced.add(avatar[len(RELATIVE_PREFIX):])
+                document_paths = await Document.filter(account_id=account_id).values_list(
+                    "path", "ocr_path"
+                )
+                for path, ocr_path in document_paths:
+                    for value in (path, ocr_path):
+                        if value and value.startswith(RELATIVE_PREFIX):
+                            referenced.add(value[len(RELATIVE_PREFIX):])
+                await run_storage_io(
+                    _remove_stale_unreferenced,
+                    storage,
+                    (f"{account['role']}/{account_id}",),
+                    referenced,
+                    cutoff,
+                )
+            cursor = int(accounts[-1]["id"])
+            await asyncio.sleep(0)
+
+        await run_storage_io(
+            _remove_stale_unreferenced, storage, ("temp",), set(), cutoff
+        )
 
 
-async def _cleanup_loop() -> None:
+async def _cleanup_loop(*, run_immediately: bool) -> None:
+    if run_immediately:
+        try:
+            await reconcile_storage()
+        except Exception:
+            logger.exception("Initial storage reconciliation failed")
     while True:
-        await asyncio.sleep(60 * 60)
+        await asyncio.sleep(max(60, settings.STORAGE_RECONCILE_INTERVAL_SECONDS))
         try:
             await reconcile_storage()
         except asyncio.CancelledError:
@@ -64,10 +89,13 @@ async def _cleanup_loop() -> None:
             logger.exception("Periodic storage reconciliation failed")
 
 
-def start_periodic_cleanup() -> None:
+def start_periodic_cleanup(*, run_immediately: bool = False) -> None:
     global _cleanup_task
     if _cleanup_task is None or _cleanup_task.done():
-        _cleanup_task = asyncio.create_task(_cleanup_loop(), name="storage-reconciliation")
+        _cleanup_task = asyncio.create_task(
+            _cleanup_loop(run_immediately=run_immediately),
+            name="storage-reconciliation",
+        )
 
 
 async def stop_periodic_cleanup() -> None:
@@ -82,7 +110,12 @@ async def stop_periodic_cleanup() -> None:
 
 async def _recover_staged_deletes() -> None:
     storage = get_storage()
-    keys = await run_storage_io(storage.iter_keys, "_trash")
+    keys = await run_storage_io(
+        lambda: list(islice(
+            storage.iter_keys_iter("_trash"),
+            max(1, settings.STORAGE_RECONCILE_TRASH_BATCH_SIZE),
+        ))
+    )
     recovered_trees: set[str] = set()
     purged_tickets: set[str] = set()
     for staged_key in keys:

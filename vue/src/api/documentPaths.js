@@ -1,32 +1,20 @@
-import contract from './documentContract.json' with { type: 'json' }
+import { apiContract, apiPath } from './apiPaths.js'
 
 const API_BASE = import.meta.env?.VITE_BASE_URL || ''
 
-const documentId = value => {
-  const normalized = Number(value)
-  if (!Number.isSafeInteger(normalized) || normalized < 1) {
-    throw new TypeError('document id must be a positive integer')
-  }
-  return String(normalized)
-}
-
-const render = (name, id) => {
-  const path = contract[name]?.path
-  if (!path) throw new TypeError(`unknown document endpoint: ${name}`)
-  return path.includes('{doc_id}')
-    ? path.replace('{doc_id}', documentId(id))
-    : path
-}
-
-export const documentApiContract = Object.freeze(contract)
-export const documentCollectionPath = render('list')
-export const documentItemPath = id => render('delete', id)
-export const documentPreviewPath = id => render('preview', id)
-export const documentDownloadPath = id => render('download', id)
-export const documentOcrPath = id => render('ocr', id)
-export const documentOcrStatusPath = id => render('ocr_status', id)
-export const documentRecyclePath = render('recycle_list')
-export const documentRestorePath = id => render('restore', id)
-export const documentPurgePath = id => render('purge', id)
+export const documentApiContract = Object.freeze(Object.fromEntries(
+  Object.entries(apiContract)
+    .filter(([name]) => name.startsWith('documents.'))
+    .map(([name, endpoint]) => [name.slice('documents.'.length), endpoint]),
+))
+export const documentCollectionPath = apiPath('documents.list')
+export const documentItemPath = id => apiPath('documents.delete', { doc_id: id })
+export const documentPreviewPath = id => apiPath('documents.preview', { doc_id: id })
+export const documentDownloadPath = id => apiPath('documents.download', { doc_id: id })
+export const documentOcrPath = id => apiPath('documents.ocr', { doc_id: id })
+export const documentOcrStatusPath = id => apiPath('documents.ocr_status', { doc_id: id })
+export const documentRecyclePath = apiPath('documents.recycle_list')
+export const documentRestorePath = id => apiPath('documents.restore', { doc_id: id })
+export const documentPurgePath = id => apiPath('documents.purge', { doc_id: id })
 export const documentPreviewUrl = id => `${API_BASE}${documentPreviewPath(id)}`
 export const documentDownloadUrl = id => `${API_BASE}${documentDownloadPath(id)}`
