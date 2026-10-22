@@ -104,8 +104,26 @@ services:
       UPLOAD_QUEUE_WAIT_SECONDS: "1"
       DOCX_MAX_ENTRIES: "2000"
       DOCX_MAX_UNCOMPRESSED_BYTES: "209715200"
+      MARKDOWN_MAX_BYTES: "5242880"
       PDF_MAX_PAGES: "1000"
-      OCR_ENABLED: ${OCR_ENABLED:-true}
+      CRAWLER_ENABLED: ${CRAWLER_ENABLED:-false}
+      # The backend reaches Crawl4AI through a fixed-upstream reverse proxy.
+      # It never shares a Docker network with the browser container.
+      CRAWLER_BASE_URL: http://crawler-gateway:8080
+      CRAWLER_API_TOKEN: ${CRAWL4AI_API_TOKEN:?Run deploy/init-env.py first}
+      CRAWLER_TIMEOUT_SECONDS: "180"
+      CRAWLER_MAX_RESPONSE_BYTES: "12582912"
+      # 1-4; each worker atomically claims a durable pending job.
+      WEB_IMPORT_WORKERS: ${WEB_IMPORT_WORKERS:-1}
+      WEB_IMPORT_RATE_LIMIT: "5"
+      WEB_IMPORT_RATE_WINDOW_SECONDS: "60"
+      WEB_IMPORT_PENDING_LIMIT: "5"
+      WEB_IMPORT_MAX_ATTEMPTS: "3"
+      WEB_IMPORT_QUEUE_SIZE: "100"
+      WEB_IMPORT_RECOVERY_BATCH_SIZE: "100"
+      WEB_IMPORT_RETENTION_DAYS: "30"
+      WEB_IMPORT_CLEANUP_BATCH_SIZE: "100"
+      OCR_ENABLED: ${OCR_ENABLED:-false}
       OCR_LANGUAGES: "chi_sim+eng"
       OCR_WORKERS: "1"
       OCR_JOBS_PER_DOCUMENT: "1"
@@ -146,6 +164,85 @@ services:
     networks:
       proxy:
       data:
+      crawler_api:
+
+  crawler:
+    profiles: ["web-import"]
+    # 0.9.5 routes Chromium and auxiliary fetches through its fail-closed
+    # resolve-and-pin proxy. Pin the reviewed multi-arch manifest so a mutable
+    # registry tag cannot silently replace that security boundary.
+    image: unclecode/crawl4ai:0.9.5@sha256:0b05666882bfb67f45d559a5b827839c54127b74aedd723f8ab338a3571b5fc9
+    restart: unless-stopped
+    init: true
+    # Crawl4AI 0.9.5 fails closed when a resolver returns Docker Desktop's
+    # synthetic 198.18.0.0/15 addresses. Operators may point this at an
+    # organisation resolver, but it must return the real public destination IP.
+    dns:
+      - ${CRAWLER_DNS:-1.1.1.1}
+    environment:
+      CRAWL4AI_API_TOKEN: ${CRAWL4AI_API_TOKEN:?Run deploy/init-env.py first}
+      CRAWL4AI_ALLOW_INTERNAL_URLS: "false"
+    expose:
+      - "11235"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:11235/health"]
+      interval: 20s
+      timeout: 5s
+      retries: 8
+      start_period: 90s
+    mem_limit: 1400m
+    memswap_limit: 1800m
+    cpus: 1.25
+    shm_size: 512m
+    pids_limit: 256
+    logging: *logging
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+      - /var/lib/redis:uid=999,gid=999,mode=0700
+      - /var/lib/crawl4ai/outputs:uid=999,gid=999,mode=0700
+      - /home/appuser/.crawl4ai:uid=999,gid=999,mode=0700
+      - /home/appuser/.cache/url_seeder:uid=999,gid=999,mode=0700
+      - /home/appuser/.gunicorn:uid=999,gid=999,mode=0700
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - crawl_control
+      - crawl_egress
+
+  crawler-gateway:
+    profiles: ["web-import"]
+    image: iknowread-web:${APP_TAG:-local}
+    restart: unless-stopped
+    command: ["caddy", "run", "--config", "/etc/caddy/Caddyfile.crawler-gateway", "--adapter", "caddyfile"]
+    volumes:
+      - ./deploy/Caddyfile.crawler-gateway:/etc/caddy/Caddyfile.crawler-gateway:ro
+    depends_on:
+      crawler:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+    mem_limit: 64m
+    memswap_limit: 128m
+    logging: *logging
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+      - /config:size=4m,mode=0700,uid=10002,gid=10002
+      - /data:size=4m,mode=0700,uid=10002,gid=10002
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - crawler_api
+      - crawl_control
 
   web:
     image: iknowread-web:${APP_TAG:-local}
@@ -194,3 +291,8 @@ networks:
         - subnet: 172.30.30.0/24
   data:
     internal: true
+  crawler_api:
+    internal: true
+  crawl_control:
+    internal: true
+  crawl_egress:

@@ -20,7 +20,7 @@
             maxlength="12000"
             rows="5"
             placeholder="添加你的理解、疑问，或保留 AI 解释"
-            @input="$emit('update:remark', $event.target.value)"
+            @input="$emit('update:remark', eventValue($event))"
         ></textarea>
         <div class="highlight-detail-edit-actions">
           <span>{{ detail.remark.length }} / 12000</span>
@@ -51,6 +51,7 @@ defineProps({ detail: { type: Object, required: true } })
 defineEmits(['close', 'edit', 'cancel-edit', 'save', 'locate', 'remove', 'update:remark'])
 
 const root = ref()
+const eventValue = event => event.target instanceof HTMLTextAreaElement ? event.target.value : ''
 defineExpose({ element: root })
 </script>
 

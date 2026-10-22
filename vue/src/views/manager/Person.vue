@@ -31,7 +31,8 @@
 
 <script setup>
 import {reactive, ref} from "vue"
-import request, { notifyRequestError } from "@/utils/request";
+import { updateAccount } from '@/api/accounts'
+import { notifyRequestError } from '@/utils/request'
 import { uploadAvatar } from "@/api/files";
 import { fileUrl, avatarUploadHandlers } from "@/utils/file";
 import { Check, Plus } from "@element-plus/icons-vue";
@@ -67,7 +68,7 @@ const save = async () => {
       ElMessage.error('当前账号角色无效，请重新登录')
       return
     }
-    const res = await request.put('/accounts/' + data.user.id, {
+    const res = await updateAccount(data.user.id, {
       name: data.user.name,
       avatar: data.user.avatar || null,
     }, {

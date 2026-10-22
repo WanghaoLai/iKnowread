@@ -5,7 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 SCAN_IMAGES=false
-if [[ "${1:-}" == "--scan" ]]; then
+if [[ $# -eq 1 && "${1:-}" == "--scan" ]]; then
     SCAN_IMAGES=true
 elif [[ $# -gt 0 ]]; then
     echo "用法: bash deploy/release-check.sh [--scan]" >&2
@@ -38,27 +38,36 @@ export APP_TAG=local
 export DB_PASSWORD='release-check-db-password-not-for-production'
 export MYSQL_ROOT_PASSWORD='release-check-root-password-not-for-production'
 export AUTH_SECRET='release-check-auth-secret-not-for-production-0123456789'
+export CRAWL4AI_API_TOKEN='release-check-crawler-token-not-for-production-0123456789'
+export CRAWLER_ENABLED=true
 export DOMAIN='localhost'
 export ACME_EMAIL='release-check@example.invalid'
 export VERIFY_ADMIN_PASSWORD='release-check-admin-password-not-for-production'
 
 echo '[1/7] 校验 Compose 配置'
-docker compose --env-file /dev/null \
+python3 fastapi-app/scripts/verify_delivery_manifest.py
+docker compose --env-file /dev/null --profile web-import \
     -f compose.yaml -f deploy/compose.verify.yaml config --quiet
+docker compose --env-file /dev/null --profile web-import \
+    -f compose.yaml -f deploy/compose.verify.yaml config --format json \
+    | python3 fastapi-app/scripts/verify_crawler_isolation.py
 
 echo '[2/7] 构建三个生产镜像'
 for service in db backend web; do
     docker compose --env-file /dev/null build "$service"
 done
+docker compose --env-file /dev/null --profile web-import pull crawler
 
 echo '[3/7] 在生产后端镜像中运行静态检查和回归测试'
 docker run --rm \
     -e "AUTH_SECRET=${AUTH_SECRET}" \
     -e PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    --mount "type=bind,src=${ROOT_DIR}/fastapi-app/tests,dst=/app/tests,readonly" \
+    --mount "type=bind,src=${ROOT_DIR}/fastapi-app/scripts,dst=/app/scripts,readonly" \
     --mount "type=bind,src=${ROOT_DIR}/fastapi-app,dst=/source,readonly" \
-    --mount "type=bind,src=${ROOT_DIR}/vue/src/api/documentContract.json,dst=/vue/src/api/documentContract.json,readonly" \
+    --mount "type=bind,src=${ROOT_DIR}/vue/src/api/apiContract.json,dst=/vue/src/api/apiContract.json,readonly" \
     "iknowread-backend:${APP_TAG}" \
-    sh -eu -c 'python -m pip install --target /tmp/check-tools -r /source/requirements-dev.lock >/dev/null && export PATH="/tmp/check-tools/bin:$PATH" && cd /source && ruff check --no-cache app tests scripts && python -m unittest discover -s tests -p "test_*.py"'
+    sh -eu -c 'python -m pip install --target /tmp/check-tools -r /source/requirements-dev.lock >/dev/null && export PATH="/tmp/check-tools/bin:$PATH" PYTHONPATH="/tmp/check-tools" COVERAGE_FILE="/tmp/iknowread.coverage" && cd /source && python scripts/document_contract.py --check && ruff check --no-cache app tests scripts && mypy && coverage erase && coverage run -m unittest discover -s tests -p "test_*.py" && coverage report'
 
 echo '[4/7] 使用锁文件执行前端静态检查、测试、生产依赖审计和构建'
 docker run --rm \
@@ -66,6 +75,7 @@ docker run --rm \
     --workdir /workspace \
     --mount "type=bind,src=${ROOT_DIR}/vue/package.json,dst=/workspace/package.json,readonly" \
     --mount "type=bind,src=${ROOT_DIR}/vue/package-lock.json,dst=/workspace/package-lock.json,readonly" \
+    --mount "type=bind,src=${ROOT_DIR}/vue/jsconfig.json,dst=/workspace/jsconfig.json,readonly" \
     --mount "type=bind,src=${ROOT_DIR}/vue/eslint.config.js,dst=/workspace/eslint.config.js,readonly" \
     --mount "type=bind,src=${ROOT_DIR}/vue/vite.config.mjs,dst=/workspace/vite.config.mjs,readonly" \
     --mount "type=bind,src=${ROOT_DIR}/vue/index.html,dst=/workspace/index.html,readonly" \
@@ -74,7 +84,7 @@ docker run --rm \
     --mount "type=bind,src=${ROOT_DIR}/vue/src,dst=/workspace/src,readonly" \
     --mount "type=bind,src=${ROOT_DIR}/vue/tests,dst=/workspace/tests,readonly" \
     node:24-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20 \
-    sh -eu -c 'npm ci && npm run check && npm audit --omit=dev'
+    sh -eu -c 'npm ci && npm run check && test -z "$(find dist -type f -name "*.map" -print -quit)" && ! grep -R "sourceMappingURL=" dist && npm audit --omit=dev'
 
 echo '[5/7] 校验运行镜像中的关键二进制、真实 OCR 与 Caddy 配置'
 docker run --rm \
@@ -94,7 +104,7 @@ docker run --rm --read-only \
 echo '[6/7] 启动隔离栈并验证重启持久化、网关和数据库约束'
 VERIFY_PROJECT="iknowread-release-check-$$"
 COMPOSE_VERIFY=(
-    docker compose --env-file /dev/null -p "$VERIFY_PROJECT"
+    docker compose --env-file /dev/null --profile web-import -p "$VERIFY_PROJECT"
     -f compose.yaml -f deploy/compose.verify.yaml
 )
 cleanup_verify_stack() {
@@ -110,7 +120,6 @@ run_smoke() {
         -e "IKNOWREAD_TEST_ADMIN=admin" \
         -e "IKNOWREAD_TEST_ADMIN_PASSWORD=${VERIFY_ADMIN_PASSWORD}" \
         --mount "type=bind,src=${ROOT_DIR}/fastapi-app/scripts,dst=/app/scripts,readonly" \
-        --mount "type=bind,src=${ROOT_DIR}/vue/src/api/documentContract.json,dst=/vue/src/api/documentContract.json,readonly" \
         "iknowread-backend:${APP_TAG}" \
         python /app/scripts/docker_smoke_check.py "$1" \
             --base-url https://localhost --insecure
@@ -140,6 +149,11 @@ if [[ "$SCAN_IMAGES" == true ]]; then
             --format packages \
             "local://iknowread-${image}:${APP_TAG}"
     done
+    docker scout cves --exit-code \
+        --only-severity critical,high \
+        --only-fixed \
+        --format packages \
+        "unclecode/crawl4ai:0.9.5@sha256:0b05666882bfb67f45d559a5b827839c54127b74aedd723f8ab338a3571b5fc9"
 else
     echo '已跳过 Docker Scout；正式发布前请使用 --scan 再运行一次。'
 fi

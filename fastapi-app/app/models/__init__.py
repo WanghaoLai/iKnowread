@@ -4,3 +4,4 @@ from app.models.ai_config import AIConfig  # noqa: F401
 from app.models.note import Note  # noqa: F401
 from app.models.highlight import Highlight  # noqa: F401
 from app.models.processing_task import DocumentProcessingTask  # noqa: F401
+from app.models.web_import_job import WebImportJob  # noqa: F401

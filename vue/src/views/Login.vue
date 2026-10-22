@@ -95,14 +95,14 @@
 <script setup>
   import { nextTick, onMounted, reactive, ref } from "vue";
   import { Lock, Refresh, User } from "@element-plus/icons-vue";
-  import request from "@/utils/request";
+  import { getCapabilities, getCaptcha, loginAccount } from '@/api/auth'
   import { ElMessage } from "element-plus";
   import router from "@/router";
   import '@/assets/css/auth.css'
   import { setSession } from '@/utils/session'
 
   const data = reactive({
-    form: { role: 'user', captcha_id: '', captcha_code: '' },
+    form: { username: '', password: '', role: 'user', captcha_id: '', captcha_code: '' },
     rules: {
       username: [
         { required: true, message: '请输入账号', trigger: 'blur' },
@@ -129,7 +129,7 @@
   onMounted(async () => {
     const captchaRequest = refreshCaptcha(false)
     try {
-      const res = await request.get('/capabilities', { skipErrorToast: true })
+      const res = await getCapabilities({ skipErrorToast: true })
       registrationEnabled.value = Boolean(res.data?.registration_enabled)
     } catch (_) {
       registrationEnabled.value = false
@@ -155,7 +155,7 @@
     formRef.value?.clearValidate('captcha_code')
     if (clearError) clearLoginError()
     try {
-      const res = await request.get('/captcha', {
+      const res = await getCaptcha({
         params: { timestamp: Date.now() }, timeout: 10000, skipErrorToast: true,
       })
       data.form.captcha_id = res.data?.captcha_id || ''
@@ -183,7 +183,7 @@
 
     submitting.value = true
     try {
-      const res = await request.post('/login', data.form, { skipErrorToast: true })
+      const res = await loginAccount(data.form, { skipErrorToast: true })
       if (res.code !== '200') {
         loginError.value = res.msg || '登录失败，请稍后重试'
         return

@@ -19,6 +19,9 @@ from app.migrations import (
     v012_normalize_usernames,
     v013_document_processing_tasks,
     v014_remove_placeholder_processing_tasks,
+    v015_markdown_documents,
+    v016_web_imports,
+    v017_web_import_lifecycle,
 )
 
 MIGRATIONS = (
@@ -36,6 +39,9 @@ MIGRATIONS = (
     v012_normalize_usernames,
     v013_document_processing_tasks,
     v014_remove_placeholder_processing_tasks,
+    v015_markdown_documents,
+    v016_web_imports,
+    v017_web_import_lifecycle,
 )
 
 

@@ -42,3 +42,10 @@ test('uses document scope for DOCX anchors', () => {
   assert.equal(anchor.scope, 'document')
   assert.ok(isSourceAnchor(anchor))
 })
+
+test('uses document scope for Markdown anchors', () => {
+  const anchor = createPointAnchor({ ...pdf, sourceFormat: 'md' }, { page: 9, progression: 0.6 })
+  assert.equal(anchor.page, null)
+  assert.equal(anchor.scope, 'document')
+  assert.ok(isSourceAnchor(anchor))
+})

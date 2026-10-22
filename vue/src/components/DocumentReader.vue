@@ -4,6 +4,15 @@
     <div class="reader-toolbar">
       <div class="reader-title" :title="model.title">{{ model.title }}</div>
       <div class="reader-tools">
+        <el-tag v-if="model.sourceType === 'url'" size="small" type="success" effect="plain">网页收藏</el-tag>
+        <el-link
+            v-if="model.sourceType === 'url' && model.sourceUrl"
+            :href="model.sourceUrl"
+            target="_blank"
+            rel="noopener noreferrer nofollow"
+            type="primary"
+            :title="model.sourceUrl"
+        >查看原网页</el-link>
         <el-button
             class="reader-highlight-button"
             size="small"
@@ -86,7 +95,7 @@
         @remove="removeHighlight"
     />
 
-    <!-- 渲染区：PDF.js 画布 / docx-preview 容器 -->
+    <!-- 渲染区：PDF.js 画布 / DOCX / Markdown 长文容器 -->
     <div class="reader-body" ref="bodyRef">
       <div v-if="error" class="reader-error">
         <el-icon :size="40"><WarningFilled /></el-icon>
@@ -101,7 +110,14 @@
         </div>
         <div v-show="readingMode === 'continuous'" ref="continuousRef" class="reader-continuous" aria-label="PDF 长文连续阅读区"></div>
       </div>
-      <div v-show="model.engine === 'docx'" class="reader-docx" ref="docxRef" tabindex="0"></div>
+      <div v-show="model.engine === 'docx'" class="reader-longform reader-docx" ref="docxRef" tabindex="0"></div>
+      <article
+          v-show="model.engine === 'markdown'"
+          class="reader-longform reader-markdown"
+          ref="markdownRef"
+          tabindex="0"
+          aria-label="Markdown 文档内容"
+      ></article>
     </div>
 
     <Transition name="reader-pager-fade">
@@ -165,11 +181,8 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import * as pdfjsLib from 'pdfjs-dist'
-import PdfjsWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?worker'
-import { renderAsync } from 'docx-preview'
 import { ArrowLeft, ArrowRight, CollectionTag, Loading, Refresh, Search, WarningFilled } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import DocumentHighlightDetail from '@/components/document-reader/DocumentHighlightDetail.vue'
@@ -177,20 +190,19 @@ import DocumentHighlightManager from '@/components/document-reader/DocumentHighl
 import DocumentSearchResults from '@/components/document-reader/DocumentSearchResults.vue'
 import SelectionExplainPanel from '@/components/document-reader/SelectionExplainPanel.vue'
 import { useDocumentHighlights } from '@/composables/useDocumentHighlights'
+import { useDocumentLoader } from '@/composables/useDocumentLoader'
 import { useDocumentOcr } from '@/composables/useDocumentOcr'
 import { useDocumentSearch } from '@/composables/useDocumentSearch'
 import { isPdfRenderCancellation as isRenderCancellation, usePdfRenderer } from '@/composables/usePdfRenderer'
 import { useReadingProgress } from '@/composables/useReadingProgress'
-import { fetchBytes } from '@/utils/preview'
-import request, { notifyRequestError } from '@/utils/request'
+import { useSelectionExplanation } from '@/composables/useSelectionExplanation'
+import { deleteHighlight, listHighlights, updateHighlight } from '@/api/highlights'
+import { notifyRequestError } from '@/utils/request'
 import { getDocumentOcrStatus, retryDocumentOcr } from '@/api/documents'
 import {
-  anchorFromRange,
   isSourceAnchor,
   resolveAnchorRange,
 } from '@/utils/sourceAnchor'
-
-pdfjsLib.GlobalWorkerOptions.workerPort = new PdfjsWorker()
 
 const READING_MODE_KEY = 'iknowread:pdf-reading-mode'
 const props = defineProps({
@@ -215,7 +227,7 @@ const pageSurfaceRef = ref()
 const textLayerRef = ref()
 const continuousRef = ref()
 const docxRef = ref()
-const explainRef = ref()
+const markdownRef = ref()
 const highlightDetailRef = ref()
 const {
   highlights,
@@ -235,58 +247,10 @@ const {
   rangeFor: rangeForHighlight,
   findResolved: findResolvedHighlight,
 } = useDocumentHighlights()
-const explain = reactive({
-  visible: false,
-  selection: '',
-  answer: '',
-  model: '',
-  modelName: '',
-  provider: '',
-  providerName: '',
-  configName: '',
-  documentVersion: '',
-  sourceAnchor: null,
-  error: '',
-  needsConfig: false,
-  loading: false,
-  copied: false,
-  noteOpen: false,
-  noteRemark: '',
-  noteSaving: false,
-  noteSaved: false,
-  noteId: null,
-  left: 12,
-  top: 12,
-  anchorRect: null,
-})
-let abortController = null
-let explainController = null
-let loadVersion = 0
 let resizeObserver = null
 let resizeTimer = null
 let highlightLoadSequence = 0
 let appliedInitialAnchor = ''
-const explanationCache = new Map()
-
-const hardenDocxDom = (container) => {
-  if (!container) return
-  container.querySelectorAll('script, iframe, object, embed, form, base').forEach(node => node.remove())
-  container.querySelectorAll('a[href]').forEach(link => {
-    const raw = link.getAttribute('href') || ''
-    if (raw.startsWith('#')) return
-    try {
-      const parsed = new URL(raw, window.location.origin)
-      if (!['http:', 'https:', 'mailto:'].includes(parsed.protocol)) {
-        link.removeAttribute('href')
-        return
-      }
-      link.target = '_blank'
-      link.rel = 'noopener noreferrer nofollow'
-    } catch (_) {
-      link.removeAttribute('href')
-    }
-  })
-}
 
 const {
   activeUrl,
@@ -315,17 +279,15 @@ const selectionHint = computed(() => {
   return readingMode.value === 'continuous' ? '当前文档没有可选择文字' : '此页没有可选择文字'
 })
 
-const normalizeSelection = value => value
-  .replace(/\u00a0/g, ' ')
-  .replace(/\s+/g, ' ')
-  .replace(/([\u3400-\u9fff])\s+(?=[\u3400-\u9fff])/g, '$1')
-  .trim()
-
 const currentSourceModel = () => ({
   id: props.model.id,
   contentVersion: contentVersion.value,
   sourceFormat: props.model.sourceFormat,
 })
+
+const longformElement = () => (
+  props.model.engine === 'markdown' ? markdownRef.value : docxRef.value
+)
 
 const {
   scrollProgression,
@@ -343,8 +305,8 @@ const {
 })
 
 const rangeScope = range => {
-  if (props.model.sourceFormat === 'docx') {
-    return { element: docxRef.value, page: null }
+  if (props.model.sourceFormat !== 'pdf') {
+    return { element: longformElement(), page: null }
   }
   const common = range.commonAncestorContainer.nodeType === Node.ELEMENT_NODE
     ? range.commonAncestorContainer
@@ -406,7 +368,7 @@ const {
 })
 
 const renderedScopeForHighlight = anchor => {
-  if (anchor.source_format === 'docx') return docxRef.value
+  if (anchor.source_format !== 'pdf') return longformElement()
   return renderedTextLayer(anchor.page)
 }
 
@@ -438,9 +400,7 @@ const loadHighlights = async () => {
   }
   highlightManager.loading = true
   try {
-    const response = await request.get('/highlights', {
-      params: { documentId, documentVersion },
-    })
+    const response = await listHighlights({ documentId, documentVersion })
     if (
       sequence !== highlightLoadSequence
       || documentId !== Number(props.model.id)
@@ -499,7 +459,7 @@ const showSourceRange = (range, { behavior = 'smooth' } = {}) => {
 }
 
 const scopeForAnchor = async (anchor, { behavior = 'smooth' } = {}) => {
-  if (anchor.source_format === 'docx') return docxRef.value
+  if (anchor.source_format !== 'pdf') return longformElement()
   const scope = await ensureTextLayer(anchor.page)
   if (!scope) return null
   if (scope.offsetTop !== null) scrollReaderTo(scope.offsetTop - 16, behavior)
@@ -526,7 +486,7 @@ const jumpToAnchor = async (anchor, { silent = false, behavior = 'smooth' } = {}
   const scope = await scopeForAnchor(anchor, { behavior })
   if (!scope) return false
   if (!anchor.selector) {
-    if ((anchor.source_format === 'docx' || readingMode.value === 'continuous') && bodyRef.value) {
+    if ((anchor.source_format !== 'pdf' || readingMode.value === 'continuous') && bodyRef.value) {
       const maximum = Math.max(0, bodyRef.value.scrollHeight - bodyRef.value.clientHeight)
       scrollReaderTo(maximum * anchor.progression, behavior)
     }
@@ -552,7 +512,7 @@ const {
   getSourceModel: currentSourceModel,
   getSourceFormat: () => props.model.sourceFormat,
   getPdfDocument: () => pdfDoc.value,
-  getDocxElement: () => docxRef.value,
+  getDocumentElement: longformElement,
   beforeOpen: () => { highlightManager.open = false },
   jumpToAnchor,
 })
@@ -562,19 +522,37 @@ const selectionBelongsToReader = range => {
   return !!bodyRef.value && (node === bodyRef.value || bodyRef.value.contains(node))
 }
 
-const positionExplanation = async () => {
-  const rect = explain.anchorRect
-  if (!rect) return
-  await nextTick()
-  const element = explainRef.value?.element
-  const width = Math.min(element?.offsetWidth || 380, window.innerWidth - 24)
-  const height = Math.min(element?.offsetHeight || 260, window.innerHeight - 24)
-  explain.left = Math.max(12, Math.min(window.innerWidth - width - 12, rect.left + rect.width / 2 - width / 2))
-  const below = rect.bottom + 12
-  explain.top = below + height <= window.innerHeight - 12
-    ? below
-    : Math.max(12, rect.top - height - 12)
-}
+const {
+  explain,
+  explainRef,
+  position: positionExplanation,
+  close: closeExplanation,
+  request: requestExplanation,
+  captureSelection,
+  copy: copyExplanation,
+  toggleHighlight: toggleHighlightCompose,
+  saveHighlight: saveSelectionHighlight,
+  showSavedHighlight: showSavedSelectionHighlight,
+  saveNote: saveExplanationNote,
+  clearCache: clearExplanationCache,
+  stop: stopExplanation,
+} = useSelectionExplanation({
+  getDocumentId: () => props.model.id,
+  getContentVersion: () => contentVersion.value,
+  getSourceModel: currentSourceModel,
+  getRangeScope: rangeScope,
+  selectionBelongsToReader,
+  getScrollProgression: scrollProgression,
+  selectionHighlight,
+  resetSelectionHighlight,
+  upsertHighlight,
+  afterHighlightSaved: applyPersistentHighlights,
+  findHighlight: id => highlights.value.find(item => item.id === id),
+  showHighlight: (item, fallbackRect) => {
+    const rect = rangeForHighlight(item)?.getBoundingClientRect() || fallbackRect
+    openHighlightDetail(item, rect)
+  },
+})
 
 const positionHighlightDetail = async () => {
   const rect = highlightDetail.anchorRect
@@ -616,7 +594,7 @@ const saveHighlightRemark = async () => {
   if (!item || highlightDetail.saving) return
   highlightDetail.saving = true
   try {
-    const response = await request.put(`/highlights/${item.id}`, { remark: highlightDetail.remark })
+    const response = await updateHighlight(item.id, { remark: highlightDetail.remark })
     const updated = response.data
     upsertHighlight(updated)
     highlightDetail.editing = false
@@ -665,7 +643,7 @@ const removeHighlight = async item => {
     return
   }
   try {
-    await request.delete(`/highlights/${item.id}`)
+    await deleteHighlight(item.id)
   } catch (error) {
     notifyRequestError(error, '高亮删除失败，请重试')
     return
@@ -695,234 +673,13 @@ const pointInsideRange = (range, point) => {
 const handleHighlightClick = event => {
   const selection = window.getSelection()
   if (selection && !selection.isCollapsed) return
-  if (!event.target.closest?.('.textLayer, .reader-docx')) return
+  if (!event.target.closest?.('.textLayer, .reader-longform')) return
   const point = caretPointFromEvent(event)
   if (!point) return
   const resolved = findResolvedHighlight(entry => pointInsideRange(entry.range, point))
   if (!resolved) return
   event.preventDefault()
   openHighlightDetail(resolved.item, resolved.range.getBoundingClientRect())
-}
-
-const closeExplanation = (clearSelection = false) => {
-  explainController?.abort()
-  explainController = null
-  explain.visible = false
-  explain.loading = false
-  if (clearSelection) window.getSelection()?.removeAllRanges()
-}
-
-const requestExplanation = async () => {
-  const content = explain.selection
-  const sourceAnchor = explain.sourceAnchor
-  if (!content || !explain.visible || !isSourceAnchor(sourceAnchor)) return
-  const cacheKey = `${sourceAnchor.document_id}:${sourceAnchor.document_version}:${sourceAnchor.page || 0}:${sourceAnchor.selector.position.start}:${content}`
-  const cached = explanationCache.get(cacheKey)
-  if (cached) {
-    Object.assign(explain, {
-      ...cached, loading: false, error: '', needsConfig: false, copied: false,
-      noteOpen: false, noteRemark: '', noteSaving: false, noteSaved: false, noteId: null,
-    })
-    if (!selectionHighlight.saved && !selectionHighlight.remarkTouched) {
-      selectionHighlight.remark = cached.answer || ''
-    }
-    positionExplanation()
-    return
-  }
-  explainController?.abort()
-  explainController = new AbortController()
-  Object.assign(explain, {
-    loading: true, answer: '', model: '', modelName: '', provider: '', providerName: '', configName: '', documentVersion: '',
-    error: '', needsConfig: false, copied: false,
-    noteOpen: false, noteRemark: '', noteSaving: false, noteSaved: false, noteId: null,
-  })
-  positionExplanation()
-  try {
-    const response = await request.post('/ai/explain', {
-      content,
-      source_anchor: sourceAnchor,
-    }, { signal: explainController.signal, timeout: 135000 })
-    if (!explain.visible || explain.selection !== content) return
-    // 展示口径统一为「服务商 · 模型」，不显示配置名称
-    const label = [response.data.provider_name || response.data.provider, response.data.model]
-        .filter(Boolean).join(' · ')
-    const value = {
-      answer: response.data.content,
-      model: label,
-      modelName: response.data.model || '',
-      provider: response.data.provider || '',
-      providerName: response.data.provider_name || '',
-      configName: response.data.config_name || '',
-      documentVersion: response.data.source_anchor?.document_version || sourceAnchor.document_version,
-      sourceAnchor: response.data.source_anchor || sourceAnchor,
-    }
-    if (explanationCache.size >= 50) explanationCache.delete(explanationCache.keys().next().value)
-    explanationCache.set(cacheKey, value)
-    Object.assign(explain, { ...value, loading: false })
-    if (!selectionHighlight.saved && !selectionHighlight.remarkTouched) {
-      selectionHighlight.remark = value.answer || ''
-    }
-  } catch (exception) {
-    if (exception.code === 'ERR_CANCELED' || !explain.visible || explain.selection !== content) return
-    const message = exception.response?.data?.msg || '解释失败，请稍后重试'
-    Object.assign(explain, {
-      loading: false,
-      error: message,
-      needsConfig: message.includes('API配置') || message.includes('先在'),
-    })
-  } finally {
-    positionExplanation()
-  }
-}
-
-const captureSelection = () => {
-  // 等待浏览器完成本次选区更新；触摸设备也可复用同一逻辑。
-  window.setTimeout(() => {
-    const selection = window.getSelection()
-    if (!selection || selection.isCollapsed || !selection.rangeCount) return
-    const range = selection.getRangeAt(0)
-    if (!selectionBelongsToReader(range)) return
-    const content = normalizeSelection(selection.toString())
-    if (!content) return
-    if (content.length > 4000) {
-      ElMessage.warning('一次最多解释 4000 个字符，请缩小选取范围')
-      return
-    }
-    const scope = rangeScope(range)
-    const sourceAnchor = scope && anchorFromRange(currentSourceModel(), range, scope.element, {
-      page: scope.page,
-      progression: scrollProgression(),
-    })
-    if (!sourceAnchor) {
-      ElMessage.warning('无法建立原文定位，请重新选择内容')
-      return
-    }
-    if (
-      explain.visible
-      && explain.selection === content
-      && explain.sourceAnchor?.selector?.position?.start === sourceAnchor.selector.position.start
-      && explain.sourceAnchor?.page === sourceAnchor.page
-    ) return
-    explainController?.abort()
-    resetSelectionHighlight()
-    Object.assign(explain, {
-      visible: true,
-      selection: content,
-      answer: '',
-      model: '',
-      modelName: '',
-      provider: '',
-      providerName: '',
-      configName: '',
-      documentVersion: sourceAnchor.document_version,
-      sourceAnchor,
-      error: '',
-      needsConfig: false,
-      loading: true,
-      copied: false,
-      noteOpen: false,
-      noteRemark: '',
-      noteSaving: false,
-      noteSaved: false,
-      noteId: null,
-      anchorRect: range.getBoundingClientRect(),
-    })
-    positionExplanation()
-    requestExplanation()
-  }, 0)
-}
-
-const copyExplanation = async () => {
-  try {
-    await navigator.clipboard.writeText(explain.answer)
-    explain.copied = true
-    window.setTimeout(() => { explain.copied = false }, 1500)
-  } catch (_) {
-    ElMessage.error('复制失败，请手动复制')
-  }
-}
-
-const toggleHighlightCompose = () => {
-  selectionHighlight.open = !selectionHighlight.open
-  if (selectionHighlight.open && !selectionHighlight.remarkTouched && !selectionHighlight.remark) {
-    selectionHighlight.remark = explain.answer || ''
-  }
-  positionExplanation()
-}
-
-const saveSelectionHighlight = async () => {
-  if (selectionHighlight.saving || selectionHighlight.saved || !isSourceAnchor(explain.sourceAnchor)) return
-  const documentId = Number(props.model.id)
-  if (!Number.isInteger(documentId) || documentId < 1) {
-    ElMessage.error('当前文档信息无效，无法保存高亮')
-    return
-  }
-  selectionHighlight.saving = true
-  try {
-    const remark = selectionHighlight.remarkTouched
-      ? selectionHighlight.remark
-      : (selectionHighlight.remark || explain.answer || '')
-    const response = await request.post('/highlights', {
-      document_id: documentId,
-      source_anchor: explain.sourceAnchor,
-      selected_text: explain.selection,
-      remark,
-      provider: explain.provider || null,
-      config_name: explain.configName || null,
-      model: explain.modelName || null,
-    })
-    const created = response.data
-    upsertHighlight(created, { selected: true })
-    await nextTick()
-    applyPersistentHighlights()
-    window.getSelection()?.removeAllRanges()
-    ElMessage.success(created.remark ? '高亮及备注已保存' : '高亮已保存')
-  } catch (error) {
-    notifyRequestError(error, '高亮保存失败，请重试')
-  } finally {
-    selectionHighlight.saving = false
-    positionExplanation()
-  }
-}
-
-const showSavedSelectionHighlight = () => {
-  const item = highlights.value.find(entry => entry.id === selectionHighlight.id)
-  if (!item) return
-  const rect = rangeForHighlight(item)?.getBoundingClientRect() || explain.anchorRect
-  openHighlightDetail(item, rect)
-}
-
-const saveExplanationNote = async () => {
-  if (!explain.answer || explain.noteSaving || explain.noteSaved) return
-  const documentId = Number(props.model.id)
-  if (!Number.isInteger(documentId) || documentId < 1) {
-    ElMessage.error('当前文档信息无效，无法添加笔记')
-    return
-  }
-  explain.noteSaving = true
-  try {
-    const response = await request.post('/notes', {
-      source_type: 'ai_explanation',
-      document_id: documentId,
-      document_version: explain.documentVersion || contentVersion.value,
-      source_anchor: explain.sourceAnchor,
-      selected_text: explain.selection,
-      content: explain.answer,
-      remark: explain.noteRemark,
-      provider: explain.provider,
-      config_name: explain.configName,
-      model: explain.modelName,
-    })
-    explain.noteId = response.data?.id || null
-    explain.noteSaved = true
-    explain.noteOpen = false
-    ElMessage.success('已加入「我的笔记」')
-  } catch (error) {
-    notifyRequestError(error, '笔记保存失败，请重试')
-  } finally {
-    explain.noteSaving = false
-    positionExplanation()
-  }
 }
 
 const goToNotes = () => {
@@ -950,6 +707,7 @@ const handleBodyScroll = () => {
   updateContinuousPageNumber()
   if (!loading.value) persistReadingProgress()
 }
+const handleWindowResize = () => closeExplanation()
 
 const sourcePositionToRestore = () => {
   const initial = props.initialAnchor
@@ -970,85 +728,40 @@ const restoreSourcePosition = async (restoration = sourcePositionToRestore()) =>
   })
 }
 
-const load = async () => {
-  cancelReadingProgress()
-  highlightLoadSequence += 1
-  closeExplanation(true)
-  closeHighlightDetail()
-  clearSourceHighlight()
-  clearPersistentHighlightRanges()
-  clearHighlights()
-  closeDocumentSearch()
-  explanationCache.clear()
-  const version = ++loadVersion
-  abortController?.abort()
-  abortController = new AbortController()
-  const signal = abortController.signal
-  error.value = ''
-  loading.value = true
-  loadingText.value = '加载中...'
-  const restoration = sourcePositionToRestore()
-  await destroyPdf()
-  if (docxRef.value) docxRef.value.innerHTML = ''
-  try {
-    if (props.model.engine === 'docx') {
-      const buffer = await fetchBytes(activeUrl.value, { signal })
-      if (version !== loadVersion) return
-      // DOCX altChunk can contain active HTML. Never grant uploaded documents
-      // application-origin execution privileges.
-      // Render off-DOM first. An obsolete render must never write into the
-      // live container after a newer load has cleared or replaced it.
-      const staging = document.createElement('div')
-      await renderAsync(buffer, staging, null, {
-        inWrapper: true,
-        renderAltChunks: false,
-        renderComments: false,
-      })
-      if (version !== loadVersion) return
-      hardenDocxDom(staging)
-      const container = docxRef.value
-      if (version !== loadVersion || !container) return
-      container.replaceChildren(...staging.childNodes)
-      await nextTick()
-      if (version !== loadVersion) return
-      await loadHighlights()
-      if (version !== loadVersion) return
-      await restoreSourcePosition(restoration)
-    } else {
-      const task = pdfjsLib.getDocument({ url: activeUrl.value, withCredentials: true })
-      setPdfLoadingTask(task)
-      const document = await task.promise
-      clearPdfLoadingTask(task)
-      if (version !== loadVersion) {
-        await document.destroy()
-        return
-      }
-      pdfDoc.value = document
-      numPages.value = document.numPages
-      const restoreAnchor = restoration?.anchor
-      const canPreselectPage = isSourceAnchor(restoreAnchor)
-        && Number(restoreAnchor.document_id) === Number(props.model.id)
-        && restoreAnchor.document_version === contentVersion.value
-        && restoreAnchor.source_format === 'pdf'
-      pageNum.value = canPreselectPage
-        ? Math.min(Math.max(restoreAnchor.page, 1), document.numPages)
-        : 1
-      await nextTick()
-      if (bodyRef.value) bodyRef.value.scrollTop = 0
-      await fitToWidth()
-      await loadHighlights()
-      await restoreSourcePosition(restoration)
-    }
-  } catch (exception) {
-    if (version === loadVersion && exception?.name !== 'AbortError' && !isRenderCancellation(exception)) {
-      error.value = exception?.message?.toLowerCase().includes('password')
-        ? '文档已加密，无法预览'
-        : (exception?.message || '预览失败')
-    }
-  } finally {
-    if (version === loadVersion) loading.value = false
-  }
-}
+const { load, stop: stopDocumentLoad } = useDocumentLoader({
+  getModel: () => props.model,
+  getActiveUrl: () => activeUrl.value,
+  getContentVersion: () => contentVersion.value,
+  getLongformElement: longformElement,
+  docxRef,
+  markdownRef,
+  bodyRef,
+  pageNum,
+  loading,
+  loadingText,
+  error,
+  pdfDoc,
+  numPages,
+  onReset: () => {
+    cancelReadingProgress()
+    highlightLoadSequence += 1
+    closeExplanation(true)
+    closeHighlightDetail()
+    clearSourceHighlight()
+    clearPersistentHighlightRanges()
+    clearHighlights()
+    closeDocumentSearch()
+    clearExplanationCache()
+  },
+  getRestoration: sourcePositionToRestore,
+  destroyPdf,
+  setPdfLoadingTask,
+  clearPdfLoadingTask,
+  fitToWidth,
+  loadHighlights,
+  restoreSourcePosition,
+  isRenderCancellation,
+})
 
 watch(() => [props.model.id, props.model.url, props.model.engine, props.model.contentVersion, props.model.ocrUpdatedAt], () => {
   syncOcr(props.model)
@@ -1070,7 +783,7 @@ onMounted(() => {
   bodyRef.value?.addEventListener('click', handleHighlightClick)
   bodyRef.value?.addEventListener('scroll', handleBodyScroll, { passive: true })
   document.addEventListener('pointerdown', handleDocumentPointerDown, true)
-  window.addEventListener('resize', closeExplanation)
+  window.addEventListener('resize', handleWindowResize)
   resizeObserver = new ResizeObserver(() => {
     clearTimeout(resizeTimer)
     resizeTimer = setTimeout(() => {
@@ -1082,8 +795,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   if (!loading.value) flushReadingProgress()
-  loadVersion += 1
-  abortController?.abort()
+  stopDocumentLoad()
   clearTimeout(resizeTimer)
   cancelReadingProgress()
   stopOcr()
@@ -1093,13 +805,13 @@ onBeforeUnmount(() => {
   bodyRef.value?.removeEventListener('keyup', captureSelection)
   bodyRef.value?.removeEventListener('click', handleHighlightClick)
   bodyRef.value?.removeEventListener('scroll', handleBodyScroll)
-  explainController?.abort()
+  stopExplanation()
   closeDocumentSearch()
   highlightLoadSequence += 1
   clearSourceHighlight()
   clearPersistentHighlightRanges()
   document.removeEventListener('pointerdown', handleDocumentPointerDown, true)
-  window.removeEventListener('resize', closeExplanation)
+  window.removeEventListener('resize', handleWindowResize)
   destroyPdf()
 })
 
@@ -1298,7 +1010,7 @@ defineExpose({ reload: load, jumpToAnchor })
 }
 .reader-continuous :deep(.textLayer span[role="img"]) { user-select: none; cursor: default; }
 .textLayer :deep(::selection),
-.reader-docx :deep(::selection) {
+.reader-longform :deep(::selection) {
   background: rgba(48, 218, 212, .34);
 }
 .reader-continuous :deep(.textLayer ::selection) { background: rgba(48, 218, 212, .34); }
@@ -1309,7 +1021,7 @@ defineExpose({ reload: load, jumpToAnchor })
   background: rgba(255, 213, 71, .64);
   text-decoration: underline rgba(197, 136, 0, .72) 1px;
 }
-.reader-docx {
+.reader-longform {
   background: #fff;
   max-width: 900px;
   margin: 16px auto;
@@ -1317,7 +1029,60 @@ defineExpose({ reload: load, jumpToAnchor })
   box-shadow: 0 4px 18px rgba(0, 56, 157, .18);
   border-radius: 2px;
 }
-.reader-docx:focus { outline: none; }
+.reader-longform:focus { outline: none; }
+.reader-markdown {
+  box-sizing: border-box;
+  min-height: calc(100% - 32px);
+  color: #273b4d;
+  font-size: 16px;
+  line-height: 1.78;
+  overflow-wrap: anywhere;
+}
+.reader-markdown :deep(h1),
+.reader-markdown :deep(h2),
+.reader-markdown :deep(h3),
+.reader-markdown :deep(h4),
+.reader-markdown :deep(h5),
+.reader-markdown :deep(h6) {
+  margin: 1.35em 0 .65em;
+  color: #173c5a;
+  line-height: 1.3;
+}
+.reader-markdown :deep(h1) { margin-top: 0; padding-bottom: .3em; border-bottom: 1px solid var(--ik-border); }
+.reader-markdown :deep(h2) { padding-bottom: .25em; border-bottom: 1px solid rgba(184, 213, 228, .65); }
+.reader-markdown :deep(p),
+.reader-markdown :deep(ul),
+.reader-markdown :deep(ol),
+.reader-markdown :deep(blockquote),
+.reader-markdown :deep(pre),
+.reader-markdown :deep(table) { margin: 0 0 1em; }
+.reader-markdown :deep(blockquote) {
+  padding: .15em 1em;
+  color: #587186;
+  border-left: 4px solid var(--ik-cyan-deep);
+  background: #f4fbfd;
+}
+.reader-markdown :deep(code) {
+  padding: .12em .35em;
+  border-radius: 4px;
+  color: #b4235a;
+  background: #f4f6f8;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: .9em;
+}
+.reader-markdown :deep(pre) {
+  overflow: auto;
+  padding: 14px 16px;
+  border-radius: 8px;
+  background: #182633;
+}
+.reader-markdown :deep(pre code) { padding: 0; color: #edf6fa; background: transparent; }
+.reader-markdown :deep(table) { display: block; width: 100%; overflow-x: auto; border-collapse: collapse; }
+.reader-markdown :deep(th),
+.reader-markdown :deep(td) { padding: 7px 10px; border: 1px solid var(--ik-border); }
+.reader-markdown :deep(th) { background: #f1f8fb; }
+.reader-markdown :deep(img) { max-width: 100%; height: auto; }
+.reader-markdown :deep(a) { color: var(--ik-blue); text-decoration: underline; text-underline-offset: 2px; }
 @media (max-width: 760px) {
   .reader-search-box { width: 100%; }
 }

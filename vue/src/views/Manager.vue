@@ -95,7 +95,7 @@
 <script setup>
 import { reactive, ref } from "vue";
 import { fileUrl, DEFAULT_AVATAR } from "@/utils/file";
-import request from "@/utils/request";
+import { logoutAccount } from '@/api/auth'
 import router from "@/router";
 import {ElMessage} from "element-plus";
 import { ArrowDown, Avatar, ChatDotRound, Delete, Document, Expand, Fold, HomeFilled, Lock, Notebook, Reading, Setting, SwitchButton, User } from '@element-plus/icons-vue'
@@ -125,7 +125,7 @@ const updateUser = () => {
 const logout = async () => {
   let serverConfirmed = false
   try {
-    await request.post('/logout', null, { skipErrorToast: true })
+    await logoutAccount({ skipErrorToast: true })
     serverConfirmed = true
   } catch (error) {
     // 401 表示该服务端会话已经失效，注销目标已经达成。
@@ -153,8 +153,7 @@ const handleAccountCommand = (command) => {
 <style scoped>
 /* 固定壳层：视口高度锁定，顶部栏与侧边栏固定，仅内容区滚动 */
 .layout {
-  height: 100vh;
-  height: 100dvh;
+  height: 100%;
   display: flex;
   flex-direction: column;
   overflow: hidden;

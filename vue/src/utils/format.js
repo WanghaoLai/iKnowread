@@ -10,4 +10,4 @@ export function formatTime(value) {
 }
 
 // 文档扩展名 → el-tag 颜色类型
-export const documentTagType = ext => ({ pdf: 'danger', docx: '' }[ext] ?? 'info')
+export const documentTagType = ext => ({ pdf: 'danger', docx: '', md: 'success' }[ext] ?? 'info')

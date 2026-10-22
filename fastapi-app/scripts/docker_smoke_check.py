@@ -9,15 +9,20 @@ from __future__ import annotations
 import argparse
 import io
 import os
+import time
 import zipfile
 
 import httpx
 
 PDF_NAME = "docker-smoke-check.pdf"
 DOCX_NAME = "docker-smoke-check.docx"
+MARKDOWN_NAME = "docker-smoke-check.md"
+MARKDOWN_CONTENT = "# Docker Markdown 冒烟测试\n\n- 上传\n- 读取\n- 渲染\n".encode()
 NOTE_TITLE = "Docker smoke persistence check"
 HIGHLIGHT_TEXT = "Docker highlight persistence check"
 SESSION_COOKIE = "iknowread_session"
+SSRF_PUBLIC_URL = "http://11.254.0.10/article"
+SSRF_REDIRECT_URL = "http://11.254.0.10/redirect-internal"
 
 
 def api_document_path(name: str, document_id: int | None = None) -> str:
@@ -93,9 +98,14 @@ def login(
         from captcha_solver import solve_response
 
     for _ in range(8):
-        captcha_id, captcha_code = solve_response(
-            expect(client.get("/api/captcha"), 200)
-        )
+        try:
+            captcha_id, captcha_code = solve_response(
+                expect(client.get("/api/captcha"), 200)
+            )
+        except RuntimeError:
+            # Captcha noise is randomized; an unreadable sample must consume
+            # one bounded retry instead of aborting the entire release check.
+            continue
         response = client.post(
             "/api/login",
             json={
@@ -133,7 +143,50 @@ def check_gateway(client: httpx.Client) -> None:
         character in "0123456789abcdef" for character in request_id
     ), "backend response is missing a safe request ID"
     capabilities = expect(client.get("/api/capabilities"), 200)["data"]
-    assert capabilities == {"registration_enabled": False, "ocr_enabled": False}
+    # Capabilities are an additive public contract. Verify the production
+    # guarantees used by this check without rejecting future optional fields.
+    assert capabilities.get("registration_enabled") is False
+    assert capabilities.get("ocr_enabled") is False
+    assert isinstance(capabilities.get("ocr_error"), str)
+    assert capabilities.get("web_import_enabled") is True
+
+
+def wait_for_web_job(client: httpx.Client, job_id: int, timeout: float = 90) -> dict:
+    deadline = time.monotonic() + timeout
+    latest = None
+    while time.monotonic() < deadline:
+        latest = expect(client.get(f"/api/web-imports/{job_id}"), 200)["data"]
+        if latest["status"] in {"success", "failed"}:
+            return latest
+        time.sleep(1)
+    raise AssertionError(f"web import job {job_id} did not finish: {latest}")
+
+
+def check_web_import_ssrf_boundary(client: httpx.Client) -> None:
+    public_job = expect(
+        client.post("/api/web-imports", json={"url": SSRF_PUBLIC_URL}), 200
+    )["data"]
+    public_result = wait_for_web_job(client, public_job["id"])
+    assert public_result["status"] == "success", public_result
+    document_id = public_result["result_document_id"]
+    assert document_id, "public crawl did not publish a document"
+    downloaded = client.get(api_document_path("download", document_id))
+    expect(downloaded, 200)
+    assert b"Safe public crawl marker" in downloaded.content
+
+    blocked_job = expect(
+        client.post("/api/web-imports", json={"url": SSRF_REDIRECT_URL}), 200
+    )["data"]
+    blocked_result = wait_for_web_job(client, blocked_job["id"])
+    assert blocked_result["status"] == "failed", (
+        "crawler followed a public-to-loopback redirect instead of failing closed"
+    )
+    assert blocked_result["result_document_id"] is None
+
+    # The successful control document is test data; remove it through the same
+    # public lifecycle used by production callers.
+    expect(client.delete(api_document_path("delete", document_id)), 200)
+    expect(client.delete(api_document_path("purge", document_id)), 200)
 
 
 def check_logout_revocation(client: httpx.Client) -> None:
@@ -249,6 +302,17 @@ def seed(client: httpx.Client, admin_username: str, admin_password: str) -> None
     )["data"]
     assert docx["ext"] == "docx"
     assert len(docx["content_version"]) == 32
+    markdown = expect(
+        client.post(
+            api_document_path("upload"),
+            files={"file": (MARKDOWN_NAME, MARKDOWN_CONTENT, "text/markdown")},
+        ),
+        200,
+    )["data"]
+    assert markdown["ext"] == "md"
+    assert markdown["ocr_status"] == "not_applicable"
+    assert len(markdown["content_version"]) == 32
+    check_web_import_ssrf_boundary(client)
     expect(
         client.post(
             "/api/notes",
@@ -294,7 +358,9 @@ def verify(client: httpx.Client) -> None:
         200,
     )["data"]["list"]
     by_name = {document["name"]: document for document in documents}
-    assert {PDF_NAME, DOCX_NAME}.issubset(by_name), "documents did not survive restart"
+    assert {PDF_NAME, DOCX_NAME, MARKDOWN_NAME}.issubset(by_name), (
+        "documents did not survive restart"
+    )
     pdf = by_name[PDF_NAME]
     ranged = client.get(
         api_document_path("preview", pdf["id"]),
@@ -311,6 +377,16 @@ def verify(client: httpx.Client) -> None:
     )
     expect(downloaded, 200)
     assert downloaded.content.startswith(b"PK")
+    markdown = by_name[MARKDOWN_NAME]
+    downloaded_markdown = client.get(
+        api_document_path("download", markdown["id"]),
+        params={"version": markdown["content_version"]},
+    )
+    expect(downloaded_markdown, 200)
+    assert downloaded_markdown.content == MARKDOWN_CONTENT
+    assert downloaded_markdown.headers.get("content-type", "").startswith(
+        "text/markdown"
+    )
 
     notes = expect(
         client.get("/api/notes", params={"keyword": NOTE_TITLE, "pageSize": 100}), 200

@@ -29,7 +29,8 @@
 <script setup>
   import { onMounted, reactive, ref } from "vue";
   import { User, Lock } from "@element-plus/icons-vue";
-  import request, { notifyRequestError } from "@/utils/request";
+  import { getCapabilities, registerAccount } from '@/api/auth'
+  import { notifyRequestError } from '@/utils/request'
   import {ElMessage} from "element-plus";
   import router from "@/router";
   import '@/assets/css/auth.css'
@@ -66,7 +67,7 @@
 
   onMounted(async () => {
     try {
-      const res = await request.get('/capabilities')
+      const res = await getCapabilities()
       if (!res.data?.registration_enabled) {
         ElMessage.info('当前系统未开放自助注册')
         router.replace('/login')
@@ -86,7 +87,7 @@
     }
     submitting.value = true
     try {
-      const res = await request.post('/register', {
+      const res = await registerAccount({
         username: data.form.username?.trim(),
         password: data.form.password,
       })

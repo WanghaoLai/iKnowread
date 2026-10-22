@@ -257,8 +257,17 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { ArrowDown, Delete, Download, EditPen, FolderOpened, FullScreen, Location, MoreFilled, Plus, Search } from '@element-plus/icons-vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import request, { notifyRequestError } from '@/utils/request'
+import { notifyRequestError } from '@/utils/request'
+import { listAiProviders } from '@/api/ai'
 import { listDocuments } from '@/api/documents'
+import {
+  createNote as createNoteRequest,
+  deleteNote as deleteNoteRequest,
+  exportNotes,
+  getNoteSummary,
+  listNotes,
+  updateNote as updateNoteRequest,
+} from '@/api/notes'
 import { formatTime } from '@/utils/format'
 import { navigateToSource } from '@/utils/sourceAnchor'
 import { useListLoader } from '@/composables/useListLoader'
@@ -272,7 +281,7 @@ const total = ref(0)
 const providerNames = reactive({})
 onMounted(async () => {
   try {
-    const { data } = await request.get('/ai/providers')
+    const { data } = await listAiProviders()
     for (const item of data || []) providerNames[item.id] = item.name
   } catch (_) { /* 展示降级：直接显示 provider id */ }
 })
@@ -345,7 +354,7 @@ const queryParams = () => ({
 })
 
 const { loading, load: loadList } = useListLoader(
-  () => request.get('/notes', { params: queryParams() }),
+  () => listNotes(queryParams()),
   { onError: error => notifyRequestError(error, '笔记加载失败，请重试') },
 )
 
@@ -358,7 +367,7 @@ async function loadNotes() {
 
 async function loadSummary() {
   try {
-    const response = await request.get('/notes/summary')
+    const response = await getNoteSummary()
     summary.total = response.data?.total || 0
     summary.documents = response.data?.documents || []
   } catch (error) {
@@ -462,9 +471,9 @@ async function saveNote() {
   saving.value = true
   try {
     if (form.id) {
-      await request.put(`/notes/${form.id}`, { title: form.title, content: form.content, remark: form.remark })
+      await updateNoteRequest(form.id, { title: form.title, content: form.content, remark: form.remark })
     } else {
-      await request.post('/notes', {
+      await createNoteRequest({
         source_type: 'manual', document_id: form.documentId,
         title: form.title, content: form.content, remark: form.remark,
       })
@@ -481,7 +490,7 @@ async function saveNote() {
 
 async function deleteNote(note) {
   await ElMessageBox.confirm(`确定删除笔记「${note.title}」吗？`, '删除笔记', { type: 'warning' })
-  await request.delete(`/notes/${note.id}`)
+  await deleteNoteRequest(note.id)
   toggleNoteSelection(note.id, false)
   ElMessage.success('笔记已删除')
   if (notes.value.length === 1 && pageNum.value > 1) pageNum.value -= 1
@@ -517,7 +526,7 @@ function safeFilePart(value) {
 async function downloadNotes(payload, filename) {
   exporting.value = true
   try {
-    const blob = await request.post('/notes/export', payload, {
+    const blob = await exportNotes(payload, {
       responseType: 'blob', timeout: 120000, skipErrorToast: true,
     })
     const url = URL.createObjectURL(blob)

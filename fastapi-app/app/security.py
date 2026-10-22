@@ -40,13 +40,13 @@ def _secret() -> bytes:
         raise RuntimeError("生产环境必须配置 AUTH_SECRET")
     if _runtime_secret is None:
         _runtime_secret = secrets.token_urlsafe(48)
-        warnings.warn("未配置 AUTH_SECRET，已生成仅本次进程有效的开发密钥")
+        warnings.warn("未配置 AUTH_SECRET，已生成仅本次进程有效的开发密钥", stacklevel=2)
     return _runtime_secret.encode("utf-8")
 
 
 def validate_security_config() -> None:
     _secret()
-    settings.cors_origin_list
+    _ = settings.cors_origin_list
 
 
 def hash_password(password: str) -> str:

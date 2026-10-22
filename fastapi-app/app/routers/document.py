@@ -100,11 +100,11 @@ async def download(
     storage = get_storage()
     return await run_storage_io(
         storage.response, document_service.storage_key(doc), filename=doc.name,
-        media_type="application/octet-stream",
+        media_type="text/markdown; charset=utf-8" if doc.ext == "md" else "application/octet-stream",
     )
 
 
-# 在线预览只负责 PDF；DOCX 由前端使用受保护下载接口渲染。
+# 在线预览只负责 PDF；DOCX 和 Markdown 由前端使用受保护下载接口渲染。
 @router.get(DOCUMENT_PREVIEW_ROUTE)
 async def preview(
     doc_id: int,

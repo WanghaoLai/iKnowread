@@ -32,7 +32,7 @@ export const useDocumentSearch = ({
   getSourceModel,
   getSourceFormat,
   getPdfDocument,
-  getDocxElement,
+  getDocumentElement,
   beforeOpen,
   jumpToAnchor,
 }) => {
@@ -72,7 +72,7 @@ export const useDocumentSearch = ({
         }
       } else {
         results.push(...collectDocumentMatches(
-          getDocxElement()?.textContent || '', query, sourceModel,
+          getDocumentElement()?.textContent || '', query, sourceModel,
         ))
       }
       if (currentSequence === sequence) search.results = results

@@ -15,7 +15,7 @@ export const useDocumentOcr = ({
   pollDelay = 2500,
   fetchStatus,
   requestRetry,
-  notifyRetryError = () => {},
+  notifyRetryError = (_error) => {},
 }) => {
   if (typeof fetchStatus !== 'function' || typeof requestRetry !== 'function') {
     throw new TypeError('OCR status and retry transports are required')

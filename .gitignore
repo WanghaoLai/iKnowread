@@ -4,6 +4,9 @@
 **/__pycache__/
 **/.pytest_cache/
 *.py[cod]
+*.backup
+*.bak
+*~
 .coverage
 coverage/
 
@@ -20,4 +23,7 @@ vue/dist/
 /backups/
 fastapi-app/data/.initial-admin-password
 
-docs
+docs/output
+docs/save_pages.py
+docs/test_crawl4ai.py
+docs/Ubuntu-24.04-Docker部署教程.md

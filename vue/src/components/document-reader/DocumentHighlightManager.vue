@@ -1,15 +1,15 @@
 <template>
   <aside class="reader-highlight-manager" aria-label="高亮管理">
     <header>
-      <div><strong>高亮管理</strong><span>{{ highlights.length }} 条</span></div>
+      <div><strong>高亮管理</strong><span>{{ items.length }} 条</span></div>
       <button type="button" aria-label="关闭高亮管理" @click="$emit('close')"><el-icon><Close /></el-icon></button>
     </header>
     <div v-if="loading" class="reader-highlight-empty">
       <el-icon class="is-loading"><Loading /></el-icon>正在加载高亮…
     </div>
-    <div v-else-if="!highlights.length" class="reader-highlight-empty">选择文档内容后即可保存高亮</div>
+    <div v-else-if="!items.length" class="reader-highlight-empty">选择文档内容后即可保存高亮</div>
     <template v-else>
-      <article v-for="highlight in highlights" :key="highlight.id" class="reader-highlight-item">
+      <article v-for="highlight in items" :key="highlight.id" class="reader-highlight-item">
         <button type="button" class="reader-highlight-locate" @click="$emit('locate', highlight)">
           <span>{{ highlight.source_anchor.page ? `第 ${highlight.source_anchor.page} 页` : '文档内容' }} · {{ formatTime(highlight.created_at) }}</span>
           <strong>{{ highlight.selected_text }}</strong>
@@ -25,13 +25,15 @@
 </template>
 
 <script setup>
+import { computed } from 'vue'
 import { Close, Delete, Edit, Loading } from '@element-plus/icons-vue'
 
-defineProps({
+const props = defineProps({
   highlights: { type: Array, required: true },
   loading: { type: Boolean, default: false },
 })
 defineEmits(['close', 'locate', 'edit', 'remove'])
+const items = computed(() => /** @type {any[]} */ (props.highlights))
 
 const formatTime = value => {
   const date = new Date(value)

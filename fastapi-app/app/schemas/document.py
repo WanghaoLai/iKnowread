@@ -24,6 +24,10 @@ class DocumentPublic(BaseModel):
     ocr_error: str | None
     ocr_updated_at: datetime | None
     deleted_at: datetime | None
+    source_type: str
+    source_url: str | None
+    source_title: str | None
+    source_fetched_at: datetime | None
     account_id: int
     created_at: datetime
     processing_stages: list[DocumentProcessingStagePublic] = Field(default_factory=list)

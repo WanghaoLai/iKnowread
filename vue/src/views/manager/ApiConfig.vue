@@ -84,7 +84,17 @@ import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { Connection, Plus } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import request, { notifyRequestError } from '@/utils/request'
+import {
+  activateAiConfig,
+  createAiConfig,
+  deleteAiConfig,
+  getAiConfigModels,
+  listAiConfigs,
+  listAiProviders,
+  testSavedAiConfig,
+  updateAiConfig,
+} from '@/api/ai'
+import { notifyRequestError } from '@/utils/request'
 
 const DEFAULT_PROMPT = '你是 iKnowread 智能助手，请用清晰、准确的中文回答用户的问题。'
 const router = useRouter()
@@ -196,7 +206,7 @@ async function load(preferredId = null) {
   loading.value = true
   loadError.value = false
   try {
-    const [providerResponse, configResponse] = await Promise.all([request.get('/ai/providers'), request.get('/ai/configs')])
+    const [providerResponse, configResponse] = await Promise.all([listAiProviders(), listAiConfigs()])
     providers.value = providerResponse.data || []
     configs.value = configResponse.data || []
     const target = configs.value.find(item => item.id === preferredId) || configs.value.find(item => item.is_active) || configs.value[0]
@@ -211,7 +221,7 @@ async function discoverModels(configId, notify = false) {
   if (!configId || discovering.value) return
   discovering.value = true
   try {
-    const { data } = await request.get(`/ai/configs/${configId}/models`, { timeout: 35000 })
+    const { data } = await getAiConfigModels(configId, { timeout: 35000 })
     if (selectedId.value !== configId) return
     discoveredModels.value = data.models || []
     discoveredForId.value = configId
@@ -233,7 +243,9 @@ async function save(withTest) {
   saving.value = true
   testResult.value = null
   try {
-    const response = selectedId.value ? await request.put(`/ai/configs/${selectedId.value}`, payload()) : await request.post('/ai/configs', payload())
+    const response = selectedId.value
+      ? await updateAiConfig(selectedId.value, payload())
+      : await createAiConfig(payload())
     const savedId = response.data.id
     form.api_key = ''
     hasKey.value = true
@@ -243,7 +255,7 @@ async function save(withTest) {
     await discoverModels(savedId, true).catch(() => {})
     if (withTest) {
       testing.value = true
-      const result = await request.post(`/ai/configs/${savedId}/test`, {}, { timeout: 135000 })
+      const result = await testSavedAiConfig(savedId, { timeout: 135000 })
       testResult.value = { success: true, message: result.data.message }
     }
   } catch (error) {
@@ -254,7 +266,7 @@ async function save(withTest) {
 async function activate(item) {
   if (!item || activatingId.value !== null) return
   activatingId.value = item.id
-  try { await request.post(`/ai/configs/${item.id}/activate`); ElMessage.success(`已切换为「${item.name}」`); await load(item.id) }
+  try { await activateAiConfig(item.id); ElMessage.success(`已切换为「${item.name}」`); await load(item.id) }
   catch (error) { notifyRequestError(error, '配置激活失败，请重试') }
   finally { activatingId.value = null }
 }
@@ -264,7 +276,7 @@ async function remove() {
     await ElMessageBox.confirm(`确定删除「${selectedConfig.value.name}」吗？${selectedConfig.value.is_active ? '删除后系统会自动启用另一项可用配置。' : ''}`, '删除模型配置', { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' })
   } catch (_) { return }
   deleting.value = true
-  try { await request.delete(`/ai/configs/${selectedId.value}`); ElMessage.success('配置已删除'); await load() }
+  try { await deleteAiConfig(selectedId.value); ElMessage.success('配置已删除'); await load() }
   catch (error) { notifyRequestError(error, '配置删除失败，请重试') }
   finally { deleting.value = false }
 }

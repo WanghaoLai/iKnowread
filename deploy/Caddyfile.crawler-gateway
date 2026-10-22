@@ -1,0 +1,13 @@
+{
+	admin off
+	auto_https off
+}
+
+:8080 {
+	reverse_proxy crawler:11235 {
+		transport http {
+			dial_timeout 5s
+			response_header_timeout 190s
+		}
+	}
+}

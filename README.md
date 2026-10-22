@@ -1,6 +1,6 @@
 # iKnowread
 
-> 自托管的文档阅读与知识沉淀平台：把你的 PDF / DOCX 变成可划词理解、可高亮标注、可沉淀笔记的私有知识库。Vue 3 + FastAPI + MySQL，Docker 一键部署。
+> 自托管的文档阅读与知识沉淀平台：把 PDF、DOCX、Markdown 和网页变成可划词理解、可高亮标注、可沉淀笔记的私有知识库。Vue 3 + FastAPI + MySQL，Docker 一键部署。
 
 ## 为什么需要 iKnowread
 
@@ -14,7 +14,7 @@
 
 | 模块 | 能力 |
 |------|------|
-| 我的文档 | PDF / DOCX 上传（单文件 ≤ 50MB，内容级校验）、预览、OCR 状态查看与重试、删除（进回收站） |
+| 我的文档 | PDF / DOCX / Markdown 上传；URL 网页异步提取为 Markdown；预览、抓取/OCR 状态与失败重试、删除（进回收站） |
 | 我的回收站 | 已删文档一键恢复（高亮、笔记关联、阅读进度一并复原）或彻底删除 |
 | 在线阅读 | PDF 分页 / 长文双模式、文档内搜索、缩放；DOCX 连续阅读；阅读进度按内容版本记忆 |
 | 划词解释与高亮 | 选中文本自动调用当前账号配置的模型解释；解释可直接保存为持久化高亮备注，重开文档高亮仍在，可编辑、定位、删除 |
@@ -32,10 +32,13 @@
 ```bash
 # 域名与证书联系人邮箱（不覆盖已有 .env）
 python3 deploy/init-env.py read.example.com you@example.com
-docker compose up -d --build      # db + backend + web 三服务，Caddy 自动 HTTPS
+docker compose up -d --build      # 核心服务：db + backend + web，Caddy 自动 HTTPS
+
+# 可选网页收藏：先在 .env 设置 CRAWLER_ENABLED=true，再显式启用隔离爬虫
+docker compose --profile web-import up -d --build
 ```
 
-生产镜像内置 OCRmyPDF、pypdfium2 与 Tesseract 中英文语言包，Docker 部署默认启用 OCR；资源紧张且不需要扫描 PDF 时可在 `.env` 中设置 `OCR_ENABLED=false`。
+生产镜像内置 OCRmyPDF、pypdfium2 与 Tesseract 中英文语言包；按首发方案，Docker 部署默认关闭 OCR。完成容量与扫描件验收后，可在 `.env` 中设置 `OCR_ENABLED=true` 并重建后端容器以启用。
 
 首次启动若无管理员，系统自动创建 `admin`，随机密码写入持久卷中的 `/app/data/.initial-admin-password`（权限 0600）。可执行 `docker compose exec backend cat /app/data/.initial-admin-password` 读取一次性密码。
 
@@ -53,16 +56,25 @@ cp fastapi-app/.env.example fastapi-app/.env   # 填 MySQL 连接、AUTH_SECRET�
 brew install tesseract tesseract-lang ghostscript          # macOS
 sudo apt-get install tesseract-ocr tesseract-ocr-chi-sim ghostscript  # Debian / Ubuntu
 
-# 3. 后端
+# 3. URL 网页收藏（可选）
+# 先在 fastapi-app/.env 中设置：
+# CRAWLER_ENABLED=true
+# CRAWLER_BASE_URL=http://127.0.0.1:11235
+# CRAWLER_API_TOKEN=<openssl rand -hex 32 的输出>
+docker compose --env-file fastapi-app/.env -f compose.crawler-dev.yaml up -d
+
+# 4. 后端
 cd fastapi-app
 python3 -m pip install -r requirements.txt
 python3 -m uvicorn main:app --reload --port 9090
 
-# 4. 前端（新终端）
+# 5. 前端（新终端）
 cd vue
 npm ci
 npm run dev    # 开发服务器把 /api 代理到 http://localhost:9090
 ```
+
+修改 crawler 配置后需要重启后端，Pydantic 仅在进程启动时读取 `.env`。可用 `docker compose --env-file fastapi-app/.env -f compose.crawler-dev.yaml ps` 确认 crawler 已健康；停止时执行同样前缀的 `stop`。
 
 开发环境不配置 `AUTH_SECRET` 时会生成仅本次进程有效的临时密钥；生产必须显式配置。`requirements.txt` 是直接依赖范围，生产镜像使用经过回归验证的 `requirements.lock` 精确版本。
 
@@ -71,10 +83,10 @@ npm run dev    # 开发服务器把 /api 代理到 http://localhost:9090
 ```
 vue/            Vue 3 + Element Plus 前端（PDF.js / docx-preview 浏览器端渲染）
 fastapi-app/    FastAPI 后端
-  app/routers/    路由层（REST：/documents /notes /highlights /accounts /ai /files）
-  app/services/   业务层（文档、OCR、高亮、笔记、认证、AI、资源限额）
+  app/routers/    路由层（REST：/documents /web-imports /notes /highlights /accounts /ai /files）
+  app/services/   业务层（文档、网页抓取队列、OCR、高亮、笔记、认证、AI、资源限额）
   app/models/     Tortoise ORM 模型（MySQL）
-  app/migrations/ 版本化迁移 v001–v011（校验和保护，禁止改写已执行历史）
+  app/migrations/ 版本化迁移（校验和保护，禁止改写已执行历史）
   app/storage/    存储抽象（StorageBackend 契约，本地实现）
 deploy/         Docker Compose、Caddy、备份与发布门禁脚本
 docs/           部署教程
@@ -87,6 +99,7 @@ docs/           部署教程
 - **统一来源锚点**（`iknowread.source-anchor/v1`）：高亮与笔记的原文定位用「偏移 + 精确引文 + 前后文」双保险，排版变化后仍可重新解析定位。
 - **存储只走契约**：文件操作不直接触盘，全部经 `StorageBackend`；换存储后端不改业务代码。
 - **单实例不变式**：内存级保护（账号锁、上传并发门、AI 信号量）依赖单后端实例，启动时以 MySQL `GET_LOCK` 强制保证。
+- **网页抓取隔离**：固定版本 Crawl4AI 运行于独立容器，不接触数据库和文件卷；后端以令牌通过内部网络调用，单工作线程持久化任务状态。
 - **账号模型唯一**：`role` 区分管理员与用户；角色、格式、路径与必填字段由数据库约束保护。
 
 ## 配置参考
@@ -105,7 +118,11 @@ docs/           部署教程
 | `USER_NOTE_LIMIT` | 10000 | 单账号笔记数上限 |
 | `USER_HIGHLIGHT_LIMIT` | 10000 | 单账号高亮总数上限 |
 | `DOCUMENT_HIGHLIGHT_LIMIT` | 1000 | 单文档高亮数及单次加载上限 |
-| `OCR_ENABLED` | 本地 `false` / Docker `true` | PDF OCR 队列开关 |
+| `OCR_ENABLED` | `false` | PDF OCR 队列开关 |
+| `CRAWLER_ENABLED` | `false` | URL 网页收藏队列开关；生产需同时使用 Compose 的 `web-import` profile，爬虫故障不会阻断核心阅读服务 |
+| `CRAWLER_API_TOKEN` | 空（Docker 自动生成） | 后端访问 Crawl4AI 内部 API 的令牌 |
+| `CRAWLER_DNS` | `1.1.1.1` | crawler 出站解析器；企业环境可换成返回真实公网 IP 的组织 DNS，避免 Docker Desktop 合成地址触发 SSRF 拦截 |
+| `WEB_IMPORT_WORKERS` | 1 | 网页导入并发 worker 数，允许 1–4；任务通过数据库条件更新原子领取 |
 | `AI_CONFIG_KEY` | 自动生成 | API Key 加密密钥；多实例必须一致 |
 | `AI_GLOBAL_CONCURRENCY` | 3 | 全站 AI 并发上限 |
 
@@ -129,7 +146,7 @@ cd ..
 bash deploy/release-check.sh
 ```
 
-`deploy/release-check.sh` 会组合 `deploy/compose.verify.yaml` 与 `fastapi-app/scripts/docker_smoke_check.py`，在独立项目名与一次性卷中验证生产镜像、真实图片型 PDF 的 OCR 文字层、迁移、HTTPS、会话与角色隔离、上传、笔记、高亮、进程重启持久性及数据库约束，完成后自动删除测试容器和卷。前后端文档 API 路径由 `vue/src/api/documentContract.json` 单一契约描述，`tests/test_document_contract.py` 保证后端路由与契约一致。
+`deploy/release-check.sh` 会组合 `deploy/compose.verify.yaml` 与 `fastapi-app/scripts/docker_smoke_check.py`，在独立项目名与一次性卷中验证生产镜像、真实图片型 PDF 的 OCR 文字层、迁移、HTTPS、会话与角色隔离、上传、笔记、高亮、进程重启持久性及数据库约束，完成后自动删除测试容器和卷。后端 `fastapi-app/app/api_paths.py` 是 API 方法与路径的单一来源；`fastapi-app/scripts/document_contract.py` 生成并校验前端 `vue/src/api/apiContract.json`，测试同时核对 FastAPI OpenAPI 路由，防止前后端路径在演进中失配。
 
 ## 安全与边界
 

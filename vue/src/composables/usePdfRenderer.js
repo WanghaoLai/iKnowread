@@ -189,7 +189,9 @@ export const usePdfRenderer = ({
     continuousRef.value.replaceChildren(fragment)
     continuousObserver = new IntersectionObserver(changes => {
       for (const change of changes) {
-        if (change.isIntersecting) renderContinuousPage(continuousEntries[Number(change.target.dataset.pageNumber) - 1], version)
+        if (change.isIntersecting && change.target instanceof HTMLElement) {
+          renderContinuousPage(continuousEntries[Number(change.target.dataset.pageNumber) - 1], version)
+        }
       }
     }, { root: bodyRef.value, rootMargin: '900px 0px', threshold: 0.01 })
     for (const entry of continuousEntries) continuousObserver.observe(entry.slot)

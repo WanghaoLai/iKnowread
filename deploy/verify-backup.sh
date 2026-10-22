@@ -3,10 +3,8 @@
 set -Eeuo pipefail
 umask 077
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BACKUP_DIR="${1:-}"
 MODE="${2:-}"
-EXPECTED_MIGRATION_COUNT="$(find "$ROOT_DIR/fastapi-app/app/migrations" -type f -name 'v[0-9][0-9][0-9]_*.py' | wc -l | tr -d ' ')"
 if [[ -z "$BACKUP_DIR" || ( -n "$MODE" && "$MODE" != "--archive-only" ) ]]; then
     echo "用法: bash deploy/verify-backup.sh BACKUP_DIR [--archive-only]" >&2
     exit 64
@@ -16,6 +14,10 @@ BACKUP_DIR="$(cd "$BACKUP_DIR" && pwd)"
 for file in database.sql.gz app-data.tar.gz deployment.tar.gz source.tar.gz SHA256SUMS; do
     test -f "$BACKUP_DIR/$file" || { echo "备份缺少 $file" >&2; exit 1; }
 done
+
+# Validate against the source saved with this backup, not the current checkout.
+EXPECTED_MIGRATION_COUNT="$(tar -tzf "$BACKUP_DIR/source.tar.gz" | grep -Ec '^fastapi-app/app/migrations/v[0-9]{3}_[^/]+\.py$')"
+test "$EXPECTED_MIGRATION_COUNT" -gt 0
 (
     cd "$BACKUP_DIR"
     sha256sum -c SHA256SUMS
@@ -28,7 +30,9 @@ done
 EXTRACT_DIR="$(mktemp -d)"
 CONTAINER="iknowread-restore-check-$$"
 cleanup() {
-    docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
+    if [[ "$MODE" != "--archive-only" ]]; then
+        docker rm -fv "$CONTAINER" >/dev/null 2>&1 || true
+    fi
     rm -rf "$EXTRACT_DIR"
 }
 trap cleanup EXIT
@@ -45,7 +49,8 @@ docker info >/dev/null
 IMAGE="iknowread-mysql:${APP_TAG:-local}"
 docker image inspect "$IMAGE" >/dev/null
 docker run --rm -d --name "$CONTAINER" \
-    --tmpfs /var/lib/mysql:rw,size=1g \
+    --memory 600m \
+    --memory-swap 900m \
     -e MYSQL_ROOT_PASSWORD=restore-check-password \
     "$IMAGE" >/dev/null
 for _attempt in $(seq 1 60); do

@@ -1,17 +1,62 @@
 # Local release verification only. The unique Compose project name used by the
 # verification commands keeps its named volumes separate from production.
 services:
+  app-data-init:
+    volumes: !override
+      - app_data:/app/data
+
   db:
     ports: !override
       - "127.0.0.1:13306:3306"
 
   backend:
     environment:
+      FORWARDED_ALLOW_IPS: "172.30.31.10"
       DEFAULT_ADMIN_PASSWORD: ${VERIFY_ADMIN_PASSWORD:?Set a disposable verification password}
     ports: !override
       - "127.0.0.1:19090:9090"
 
+  # A globally classified test address served on an isolated Docker network.
+  # /redirect-internal changes the next hop to crawler loopback, which the
+  # pinned egress proxy must reject before the browser connects.
+  ssrf-redirector:
+    image: iknowread-backend:${APP_TAG:-local}
+    restart: "no"
+    command: ["python", "/checks/ssrf_redirect_server.py"]
+    volumes:
+      - ./fastapi-app/scripts:/checks:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1/health', timeout=3)"]
+      interval: 5s
+      timeout: 4s
+      retries: 10
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: "0"
+    networks:
+      crawl_egress:
+        ipv4_address: 11.254.0.10
+
   web:
+    networks:
+      proxy:
+        ipv4_address: 172.30.31.10
     ports: !override
       - "127.0.0.1:18080:80"
       - "127.0.0.1:18443:443"
+
+networks:
+  proxy:
+    ipam:
+      config: !override
+        - subnet: 172.30.31.0/24
+  crawl_egress:
+    ipam:
+      config: !override
+        - subnet: 11.254.0.0/24
