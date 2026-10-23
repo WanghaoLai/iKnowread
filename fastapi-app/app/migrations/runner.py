@@ -22,6 +22,8 @@ from app.migrations import (
     v015_markdown_documents,
     v016_web_imports,
     v017_web_import_lifecycle,
+    v018_dashboard_reading_progress,
+    v019_announcements,
 )
 
 MIGRATIONS = (
@@ -42,6 +44,8 @@ MIGRATIONS = (
     v015_markdown_documents,
     v016_web_imports,
     v017_web_import_lifecycle,
+    v018_dashboard_reading_progress,
+    v019_announcements,
 )
 
 

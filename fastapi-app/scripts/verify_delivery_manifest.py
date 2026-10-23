@@ -9,9 +9,13 @@ ROOT = Path(__file__).resolve().parents[2]
 REQUIRED = (
     "compose.crawler-dev.yaml",
     "deploy/Caddyfile.crawler-gateway",
+    "deploy/Dockerfile.crawler",
+    "deploy/update.sh",
     "fastapi-app/app/migrations/v015_markdown_documents.py",
     "fastapi-app/app/migrations/v016_web_imports.py",
     "fastapi-app/app/migrations/v017_web_import_lifecycle.py",
+    "fastapi-app/app/migrations/v018_dashboard_reading_progress.py",
+    "fastapi-app/app/migrations/v019_announcements.py",
     "fastapi-app/app/models/web_import_job.py",
     "fastapi-app/app/routers/web_imports.py",
     "fastapi-app/app/schemas/web_import.py",

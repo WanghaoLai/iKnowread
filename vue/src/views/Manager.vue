@@ -10,20 +10,33 @@
           <span class="brand-name">iKnowread</span>
         </div>
       </div>
-      <el-dropdown trigger="click" placement="bottom-end" @command="handleAccountCommand">
-        <button type="button" class="header-user" aria-label="账户菜单：个人资料、修改密码、退出系统">
-          <img class="header-avatar" :src="fileUrl(data.user.avatar) || DEFAULT_AVATAR" alt="">
-          <span class="header-username">{{ data.user.name || data.user.username }}</span>
-          <el-icon class="header-arrow"><ArrowDown /></el-icon>
-        </button>
-        <template #dropdown>
-          <el-dropdown-menu>
-            <el-dropdown-item command="person" :icon="User">个人资料</el-dropdown-item>
-            <el-dropdown-item command="password" :icon="Lock">修改密码</el-dropdown-item>
-            <el-dropdown-item command="logout" :icon="SwitchButton" divided>退出系统</el-dropdown-item>
-          </el-dropdown-menu>
-        </template>
-      </el-dropdown>
+      <div class="header-actions">
+        <AnnouncementPanel
+          :items="announcements.items.value"
+          :unread-count="announcements.unreadCount.value"
+          :loading="announcements.loading.value"
+          :error="announcements.error.value"
+          :mutating="announcements.mutating.value"
+          @open="announcements.refresh({ silent: true })"
+          @read="announcements.read"
+          @read-all="announcements.readAll"
+          @retry="announcements.refresh()"
+        />
+        <el-dropdown trigger="click" placement="bottom-end" @command="handleAccountCommand">
+          <button type="button" class="header-user" aria-label="账户菜单：个人资料、修改密码、退出系统">
+            <img class="header-avatar" :src="fileUrl(data.user.avatar) || DEFAULT_AVATAR" alt="">
+            <span class="header-username">{{ data.user.name || data.user.username }}</span>
+            <el-icon class="header-arrow"><ArrowDown /></el-icon>
+          </button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item command="person" :icon="User">个人资料</el-dropdown-item>
+              <el-dropdown-item command="password" :icon="Lock">修改密码</el-dropdown-item>
+              <el-dropdown-item command="logout" :icon="SwitchButton" divided>退出系统</el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
+      </div>
     </header>
 
     <div class="layout-body">
@@ -64,6 +77,10 @@
             <el-icon><Setting /></el-icon>
             <span>API配置</span>
           </el-menu-item>
+          <el-menu-item v-if="data.user.role === 'admin'" index="/manager/announcements">
+            <el-icon><Bell /></el-icon>
+            <span>公告管理</span>
+          </el-menu-item>
           <el-sub-menu index="user" v-if="data.user.role === 'admin'">
             <template #title>
               <el-icon><Avatar /></el-icon>
@@ -94,16 +111,19 @@
 
 <script setup>
 import { reactive, ref } from "vue";
+import AnnouncementPanel from '@/components/AnnouncementPanel.vue'
+import { useAnnouncements } from '@/composables/useAnnouncements'
 import { fileUrl, DEFAULT_AVATAR } from "@/utils/file";
 import { logoutAccount } from '@/api/auth'
 import router from "@/router";
 import {ElMessage} from "element-plus";
-import { ArrowDown, Avatar, ChatDotRound, Delete, Document, Expand, Fold, HomeFilled, Lock, Notebook, Reading, Setting, SwitchButton, User } from '@element-plus/icons-vue'
+import { ArrowDown, Avatar, Bell, ChatDotRound, Delete, Document, Expand, Fold, HomeFilled, Lock, Notebook, Reading, Setting, SwitchButton, User } from '@element-plus/icons-vue'
 import { clearSession, getSession } from '@/utils/session'
 
 const data = reactive({
   user: getSession()
 })
+const announcements = useAnnouncements()
 
 if (!data.user?.id) {
   ElMessage.error('请登录！')
@@ -225,6 +245,12 @@ const handleAccountCommand = (command) => {
   background-clip: text;
   -webkit-text-fill-color: transparent;
   color: transparent;
+}
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
 }
 .header-user {
   display: flex;

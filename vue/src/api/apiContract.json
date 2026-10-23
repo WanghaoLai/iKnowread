@@ -71,6 +71,38 @@
     "method": "PUT",
     "path": "/ai/configs/{config_id}"
   },
+  "announcements.admin_list": {
+    "method": "GET",
+    "path": "/admin/announcements"
+  },
+  "announcements.create": {
+    "method": "POST",
+    "path": "/admin/announcements"
+  },
+  "announcements.delete": {
+    "method": "DELETE",
+    "path": "/admin/announcements/{announcement_id}"
+  },
+  "announcements.list": {
+    "method": "GET",
+    "path": "/announcements"
+  },
+  "announcements.read": {
+    "method": "PUT",
+    "path": "/announcements/{announcement_id}/read"
+  },
+  "announcements.read_all": {
+    "method": "PUT",
+    "path": "/announcements/read-all"
+  },
+  "announcements.status": {
+    "method": "PATCH",
+    "path": "/admin/announcements/{announcement_id}/status"
+  },
+  "announcements.update": {
+    "method": "PUT",
+    "path": "/admin/announcements/{announcement_id}"
+  },
   "auth.captcha": {
     "method": "GET",
     "path": "/captcha"
@@ -94,6 +126,10 @@
   "auth.register": {
     "method": "POST",
     "path": "/register"
+  },
+  "dashboard.summary": {
+    "method": "GET",
+    "path": "/dashboard"
   },
   "documents.delete": {
     "method": "DELETE",
@@ -190,6 +226,14 @@
   "notes.update": {
     "method": "PUT",
     "path": "/notes/{note_id}"
+  },
+  "reading_progress.get": {
+    "method": "GET",
+    "path": "/reading-progress/{document_id}"
+  },
+  "reading_progress.save": {
+    "method": "PUT",
+    "path": "/reading-progress"
   },
   "web_imports.cancel": {
     "method": "POST",

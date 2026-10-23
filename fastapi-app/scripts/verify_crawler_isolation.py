@@ -10,10 +10,7 @@ import json
 import sys
 
 
-CRAWLER_IMAGE = (
-    "unclecode/crawl4ai:0.9.5@"
-    "sha256:0b05666882bfb67f45d559a5b827839c54127b74aedd723f8ab338a3571b5fc9"
-)
+CRAWLER_IMAGE_PREFIX = "iknowread-crawler:"
 
 
 def _networks(service: dict) -> set[str]:
@@ -27,8 +24,9 @@ def verify(config: dict) -> None:
     crawler = services["crawler"]
     gateway = services["crawler-gateway"]
 
-    if crawler.get("image") != CRAWLER_IMAGE:
-        raise AssertionError("crawler image must remain pinned to the reviewed 0.9.5 digest")
+    crawler_image = crawler.get("image", "")
+    if not crawler_image.startswith(CRAWLER_IMAGE_PREFIX) or crawler_image.endswith(":latest"):
+        raise AssertionError("crawler image must use an immutable iKnowread release tag")
     crawler_environment = crawler.get("environment", {})
     if str(crawler_environment.get("CRAWL4AI_ALLOW_INTERNAL_URLS", "")).lower() != "false":
         raise AssertionError("crawler must fail closed for internal destinations")

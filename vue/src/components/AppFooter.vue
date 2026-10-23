@@ -7,8 +7,22 @@
       target="_blank"
       rel="noopener noreferrer"
     >赣ICP备2026027332号-1</a>
+    <span class="app-footer-divider" aria-hidden="true"></span>
+    <a
+      class="app-footer-police-record"
+      href="https://beian.mps.gov.cn/#/query/webSearch?code=36073202361022"
+      target="_blank"
+      rel="noopener noreferrer"
+    >
+      <img :src="publicSecurityIcon" alt="" width="18" height="20">
+      <span>赣公网安备36073202361022号</span>
+    </a>
   </footer>
 </template>
+
+<script setup>
+import publicSecurityIcon from '@/assets/imgs/public-security-record.png'
+</script>
 
 <style scoped>
 .app-footer {
@@ -31,7 +45,7 @@
 }
 
 .app-footer a {
-  color: var(--ik-blue);
+  color: var(--ik-text-sub);
   font-weight: 500;
 }
 
@@ -52,6 +66,20 @@
   background: var(--ik-border);
 }
 
+.app-footer-police-record {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.app-footer-police-record img {
+  width: 18px;
+  height: 20px;
+  flex-shrink: 0;
+  object-fit: contain;
+}
+
 @media (max-width: 520px) {
   .app-footer {
     gap: 2px;
@@ -62,6 +90,10 @@
   .app-footer span:first-child,
   .app-footer a {
     flex-basis: 100%;
+  }
+
+  .app-footer-police-record span {
+    flex-basis: auto;
   }
 
   .app-footer-divider {

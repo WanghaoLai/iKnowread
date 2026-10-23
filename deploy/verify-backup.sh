@@ -46,7 +46,11 @@ fi
 
 command -v docker >/dev/null
 docker info >/dev/null
-IMAGE="iknowread-mysql:${APP_TAG:-local}"
+IMAGE="$(docker compose config --images db)"
+if [[ -z "$IMAGE" || "$IMAGE" == *$'\n'* ]]; then
+    echo "无法确定当前数据库镜像。" >&2
+    exit 1
+fi
 docker image inspect "$IMAGE" >/dev/null
 docker run --rm -d --name "$CONTAINER" \
     --memory 600m \

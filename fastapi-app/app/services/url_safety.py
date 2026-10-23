@@ -63,7 +63,7 @@ async def assert_resolved_public(host: str) -> None:
 
     This check reduces abusive queue traffic but is not the SSRF boundary: a
     resolver result checked here cannot be reused safely by a separate browser.
-    The pinned Crawl4AI 0.9.5 image validates and pins the address it actually
+    The pinned Crawl4AI 0.9.4 image validates and pins the address it actually
     dials for every request and redirect hop. Deployment additionally keeps
     that browser container off the backend and database networks.
     """

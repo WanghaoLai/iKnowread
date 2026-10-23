@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import io
 import os
+import re
 import time
 import zipfile
 
@@ -133,9 +134,15 @@ def login(
 def check_gateway(client: httpx.Client) -> None:
     page = client.get("/")
     expect(page, 200)
+    assert page.headers.get("cache-control") == "no-cache, no-store, must-revalidate"
     assert "default-src 'self'" in page.headers.get("content-security-policy", "")
     assert page.headers.get("x-content-type-options") == "nosniff"
     assert page.headers.get("x-frame-options") == "DENY"
+    asset_path = re.search(r'(?:href|src)="(/assets/[^"?]+)', page.text)
+    assert asset_path, "frontend entry does not reference a fingerprinted asset"
+    asset = client.get(asset_path.group(1))
+    expect(asset, 200)
+    assert asset.headers.get("cache-control") == "public, max-age=31536000, immutable"
     ready = client.get("/api/ready")
     expect(ready, 200)
     request_id = ready.headers.get("x-request-id", "")

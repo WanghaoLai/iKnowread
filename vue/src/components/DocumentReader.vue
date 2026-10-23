@@ -199,8 +199,10 @@ import { useSelectionExplanation } from '@/composables/useSelectionExplanation'
 import { deleteHighlight, listHighlights, updateHighlight } from '@/api/highlights'
 import { notifyRequestError } from '@/utils/request'
 import { getDocumentOcrStatus, retryDocumentOcr } from '@/api/documents'
+import { getReadingProgress, saveReadingProgress as saveRemoteReadingProgress } from '@/api/readingProgress'
 import {
   isSourceAnchor,
+  loadReadingProgressSavedAt,
   resolveAnchorRange,
 } from '@/utils/sourceAnchor'
 
@@ -302,6 +304,7 @@ const {
   getPageCount: () => numPages.value,
   getReadingMode: () => readingMode.value,
   getScrollElement: () => bodyRef.value,
+  saveRemote: anchor => saveRemoteReadingProgress(anchor, { skipErrorToast: true }),
 })
 
 const rangeScope = range => {
@@ -709,17 +712,30 @@ const handleBodyScroll = () => {
 }
 const handleWindowResize = () => closeExplanation()
 
-const sourcePositionToRestore = () => {
+const sourcePositionToRestore = async () => {
   const initial = props.initialAnchor
   const signature = initial ? JSON.stringify(initial) : ''
   if (initial && signature !== appliedInitialAnchor) {
     return { anchor: initial, signature, silent: false }
   }
-  const progress = loadStoredReadingProgress()
-  return progress ? { anchor: progress, signature: '', silent: true } : null
+  const local = loadStoredReadingProgress()
+  const localSavedAt = loadReadingProgressSavedAt(currentSourceModel())
+  try {
+    const response = await getReadingProgress(props.model.id, { skipErrorToast: true })
+    const remote = response.data
+    const remoteAnchor = remote?.source_anchor
+    if (isSourceAnchor(remoteAnchor)) {
+      const preferLocal = local && localSavedAt
+        && Date.parse(localSavedAt) >= Date.parse(remote.updated_at || '')
+      return { anchor: preferLocal ? local : remoteAnchor, signature: '', silent: true }
+    }
+  } catch (_) {
+    // 离线或旧版服务端不可用时继续使用浏览器中的进度。
+  }
+  return local ? { anchor: local, signature: '', silent: true } : null
 }
 
-const restoreSourcePosition = async (restoration = sourcePositionToRestore()) => {
+const restoreSourcePosition = async restoration => {
   if (!restoration) return
   if (restoration.signature) appliedInitialAnchor = restoration.signature
   await jumpToAnchor(restoration.anchor, {
