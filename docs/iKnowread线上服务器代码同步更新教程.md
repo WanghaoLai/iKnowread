@@ -394,7 +394,7 @@ sudo bash deploy/update.sh --include-db "$RELEASE_TAG"
 6. 校验 Compose 并构建新版本镜像。
 7. 调用 `deploy/backup.sh`，短暂停止后端写入。
 8. 导出数据库，打包整个应用数据、部署配置和源码。
-9. 校验 SHA256，并把 SQL 导入一次性 MySQL 容器做隔离恢复验证。
+9. 校验 SHA256，并把 SQL 导入一次性 MySQL 容器做隔离恢复验证；数据库已执行的迁移必须是备份源码迁移序列的连续前缀，已有校验和必须匹配，允许新源码包含尚未执行的待发布迁移。
 10. 只有备份验证成功才创建 `COMPLETE` 标记并继续激活。
 11. 原子更新 `.env` 中的应用和 MySQL 镜像标签。
 12. `docker compose up -d --wait --wait-timeout 300` 切换并等待健康检查。

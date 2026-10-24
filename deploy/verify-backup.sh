@@ -3,6 +3,7 @@
 set -Eeuo pipefail
 umask 077
 
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BACKUP_DIR="${1:-}"
 MODE="${2:-}"
 if [[ -z "$BACKUP_DIR" || ( -n "$MODE" && "$MODE" != "--archive-only" ) ]]; then
@@ -15,9 +16,6 @@ for file in database.sql.gz app-data.tar.gz deployment.tar.gz source.tar.gz SHA2
     test -f "$BACKUP_DIR/$file" || { echo "备份缺少 $file" >&2; exit 1; }
 done
 
-# Validate against the source saved with this backup, not the current checkout.
-EXPECTED_MIGRATION_COUNT="$(tar -tzf "$BACKUP_DIR/source.tar.gz" | grep -Ec '^fastapi-app/app/migrations/v[0-9]{3}_[^/]+\.py$')"
-test "$EXPECTED_MIGRATION_COUNT" -gt 0
 (
     cd "$BACKUP_DIR"
     sha256sum -c SHA256SUMS
@@ -38,6 +36,9 @@ cleanup() {
 trap cleanup EXIT
 tar -xzf "$BACKUP_DIR/app-data.tar.gz" -C "$EXTRACT_DIR"
 test -d "$EXTRACT_DIR/app-data"
+mkdir "$EXTRACT_DIR/source"
+tar -xzf "$BACKUP_DIR/source.tar.gz" -C "$EXTRACT_DIR/source"
+test -d "$EXTRACT_DIR/source/fastapi-app/app/migrations"
 
 if [[ "$MODE" == "--archive-only" ]]; then
     echo "backup-archive-check: PASS"
@@ -71,8 +72,12 @@ done
 gunzip -c "$BACKUP_DIR/database.sql.gz" | docker exec -i "$CONTAINER" sh -c \
     'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql -uroot'
 docker exec "$CONTAINER" sh -c \
-    'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql -N -uroot iknowread -e \
-    "SELECT COUNT(*) FROM schema_migration"' | grep -qx "$EXPECTED_MIGRATION_COUNT"
+    'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql -N -B -uroot iknowread -e \
+    "SELECT version, COALESCE(checksum, \"\") FROM schema_migration ORDER BY version"' \
+    > "$EXTRACT_DIR/applied-migrations.tsv"
+python3 "$ROOT_DIR/fastapi-app/scripts/verify_backup_migrations.py" \
+    "$EXTRACT_DIR/source/fastapi-app/app/migrations" \
+    "$EXTRACT_DIR/applied-migrations.tsv"
 docker exec "$CONTAINER" sh -c \
     'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql -N -uroot iknowread -e \
     "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN (\"account\",\"document\")"' \

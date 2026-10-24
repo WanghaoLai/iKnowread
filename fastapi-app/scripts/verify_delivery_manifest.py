@@ -24,6 +24,7 @@ REQUIRED = (
     "fastapi-app/app/services/web_import_service.py",
     "fastapi-app/scripts/ssrf_redirect_server.py",
     "fastapi-app/scripts/verify_crawler_isolation.py",
+    "fastapi-app/scripts/verify_backup_migrations.py",
     "fastapi-app/scripts/verify_delivery_manifest.py",
     "vue/jsconfig.json",
     "vue/src/api/accounts.js",
