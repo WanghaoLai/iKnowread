@@ -49,8 +49,8 @@ echo '[1/7] 校验 Compose 配置'
 python3 fastapi-app/scripts/verify_delivery_manifest.py
 docker compose --env-file /dev/null --profile web-import \
     -f compose.yaml -f deploy/compose.verify.yaml config --quiet
-docker compose --env-file /dev/null -f compose.yaml config --format json \
-    | python3 -c 'import json, sys; config = json.load(sys.stdin); app_tag, mysql_tag = sys.argv[1:]; services = config["services"]; assert services["db"]["image"] == f"iknowread-mysql:{mysql_tag}"; assert services["backend"]["image"] == f"iknowread-backend:{app_tag}"; assert services["web"]["image"] == f"iknowread-web:{app_tag}"' \
+docker compose --env-file /dev/null --profile web-import -f compose.yaml config --format json \
+    | python3 -c 'import json, sys; config = json.load(sys.stdin); app_tag, mysql_tag = sys.argv[1:]; services = config["services"]; assert services["db"]["image"] == f"iknowread-mysql:{mysql_tag}"; assert services["backend"]["image"] == f"iknowread-backend:{app_tag}"; assert services["web"]["image"] == f"iknowread-web:{app_tag}"; assert services["crawler"]["image"] == f"iknowread-crawler:{app_tag}"' \
         "$APP_TAG" "$MYSQL_IMAGE_TAG"
 docker compose --env-file /dev/null --profile web-import \
     -f compose.yaml -f deploy/compose.verify.yaml config --format json \
@@ -58,7 +58,17 @@ docker compose --env-file /dev/null --profile web-import \
 
 echo '[2/7] 构建四个生产镜像'
 for service in db backend web crawler; do
-    docker compose --env-file /dev/null build "$service"
+    docker compose --env-file /dev/null --profile web-import build "$service"
+done
+for image in \
+    "iknowread-mysql:${MYSQL_IMAGE_TAG}" \
+    "iknowread-backend:${APP_TAG}" \
+    "iknowread-web:${APP_TAG}" \
+    "iknowread-crawler:${APP_TAG}"; do
+    docker image inspect "$image" >/dev/null || {
+        echo "构建后缺少本地镜像：${image}" >&2
+        exit 1
+    }
 done
 
 echo '[3/7] 在生产后端镜像中运行静态检查和回归测试'
@@ -99,7 +109,7 @@ docker run --rm --entrypoint /bin/sh "iknowread-mysql:${MYSQL_IMAGE_TAG}" \
     -c 'test ! -e /usr/bin/mysqlsh && mysqld --version && mysql --version && mysqldump --version'
 docker run --rm --entrypoint /usr/local/bin/gosu "iknowread-mysql:${MYSQL_IMAGE_TAG}" --version
 docker run --rm --entrypoint python "iknowread-crawler:${APP_TAG}" \
-    -c 'import importlib.metadata as metadata; assert metadata.version("Crawl4AI") == "0.9.4"'
+    -c 'import importlib.metadata as metadata; expected = {"Crawl4AI": "0.9.4", "Brotli": "1.2.1", "pypdf": "6.21.2", "filelock": "4.2.1"}; assert all(metadata.version(package) == version for package, version in expected.items()), {package: metadata.version(package) for package in expected}'
 docker run --rm --read-only \
     --tmpfs /tmp:size=256m,mode=1777 \
     -e PYTHONPATH=/app -e OCR_ENABLED=true -e OCR_LANGUAGES=chi_sim+eng \
