@@ -1,0 +1,33 @@
+# Repository metadata and workstation settings
+/.git/
+/.idea/
+/.vscode/
+/.DS_Store
+
+# Production secrets and mutable state
+/.env
+/fastapi-app/.env
+/fastapi-app/data/
+/runtime/
+/backups/
+
+# Optional server-local private-test overrides
+/compose.test.yaml
+/deploy/Caddyfile.test
+
+# Dependencies, build outputs, caches, and local databases
+/vue/node_modules/
+/vue/dist/
+node_modules/
+.venv/
+venv/
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.py[cod]
+*.log
+*.sqlite
+*.sqlite3

@@ -135,7 +135,10 @@ export function readingProgressKey(anchor) {
 export function saveReadingProgress(anchor) {
   const key = readingProgressKey(anchor)
   if (!key) return
-  try { localStorage.setItem(key, JSON.stringify(anchor)) } catch (_) {}
+  try {
+    localStorage.setItem(key, JSON.stringify(anchor))
+    localStorage.setItem(`${key}:saved-at`, new Date().toISOString())
+  } catch (_) {}
 }
 
 export function loadReadingProgress(model) {
@@ -145,6 +148,18 @@ export function loadReadingProgress(model) {
   try {
     const anchor = JSON.parse(localStorage.getItem(key) || 'null')
     return isSourceAnchor(anchor) ? anchor : null
+  } catch (_) {
+    return null
+  }
+}
+
+export function loadReadingProgressSavedAt(model) {
+  const point = createPointAnchor(model, { page: 1 })
+  const key = readingProgressKey(point)
+  if (!key) return null
+  try {
+    const value = localStorage.getItem(`${key}:saved-at`)
+    return value && Number.isFinite(Date.parse(value)) ? value : null
   } catch (_) {
     return null
   }

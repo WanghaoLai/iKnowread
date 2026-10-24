@@ -9,6 +9,15 @@ test('renders shared API paths with validated identifiers', () => {
   assert.equal(apiPath('notes.update', { note_id: 7 }), '/notes/7')
   assert.equal(apiPath('ai.config_models', { config_id: 3 }), '/ai/configs/3/models')
   assert.equal(apiMethod('ai.config_models'), 'GET')
+  assert.equal(apiPath('dashboard.summary'), '/dashboard')
+  assert.equal(apiPath('reading_progress.get', { document_id: 9 }), '/reading-progress/9')
+  assert.equal(apiMethod('reading_progress.save'), 'PUT')
+  assert.equal(apiPath('announcements.list'), '/announcements')
+  assert.equal(apiPath('announcements.read', { announcement_id: 5 }), '/announcements/5/read')
+  assert.equal(apiMethod('announcements.read_all'), 'PUT')
+  assert.equal(apiPath('announcements.admin_list'), '/admin/announcements')
+  assert.equal(apiPath('announcements.status', { announcement_id: 8 }), '/admin/announcements/8/status')
+  assert.equal(apiMethod('announcements.delete'), 'DELETE')
 })
 
 test('rejects missing, invalid and unknown API path inputs', () => {

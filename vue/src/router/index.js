@@ -20,8 +20,9 @@ const router = createRouter({
         { path: 'recycle', component: () => import('@/views/manager/Recycle.vue')},
         { path: 'reader', component: () => import('@/views/manager/Reader.vue')},
         { path: 'notes', component: () => import('@/views/manager/Notes.vue')},
-        { path: 'admin', component: () => import('@/views/manager/AccountManage.vue'), props: { role: 'admin', title: '管理员信息' }},
-        { path: 'user', component: () => import('@/views/manager/AccountManage.vue'), props: { role: 'user', title: '用户信息' }},
+        { path: 'announcements', component: () => import('@/views/manager/AnnouncementManage.vue'), meta: { requiresAdmin: true }},
+        { path: 'admin', component: () => import('@/views/manager/AccountManage.vue'), props: { role: 'admin', title: '管理员信息' }, meta: { requiresAdmin: true }},
+        { path: 'user', component: () => import('@/views/manager/AccountManage.vue'), props: { role: 'user', title: '用户信息' }, meta: { requiresAdmin: true }},
       ]
     },
     { path: '/login', component: () => import('@/views/Login.vue')},
@@ -36,10 +37,11 @@ let lastVerifiedAt = 0
 
 router.beforeEach(async (to) => {
   const user = getSession()
+  const requiresAdmin = to.matched.some(record => record.meta.requiresAdmin)
   if (to.path.startsWith('/manager') && !user.id) return '/login'
   if (to.path.startsWith('/manager')) {
     if (Date.now() - lastVerifiedAt < VERIFY_TTL_MS) {
-      if (['/manager/admin', '/manager/user'].includes(to.path) && user.role !== 'admin') {
+      if (requiresAdmin && user.role !== 'admin') {
         return '/manager/home'
       }
       return
@@ -48,7 +50,7 @@ router.beforeEach(async (to) => {
       const verifiedUser = await fetchVerifiedSession(import.meta.env.VITE_BASE_URL || '')
       setSession(verifiedUser)
       lastVerifiedAt = Date.now()
-      if (['/manager/admin', '/manager/user'].includes(to.path) && verifiedUser.role !== 'admin') {
+      if (requiresAdmin && verifiedUser.role !== 'admin') {
         return '/manager/home'
       }
     } catch (_) {

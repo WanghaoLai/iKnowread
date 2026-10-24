@@ -7,9 +7,12 @@ export const useReadingProgress = ({
   getPageCount,
   getReadingMode,
   getScrollElement,
+  saveRemote = null,
   delay = 250,
+  remoteDelay = 1200,
 }) => {
   let timer = null
+  let remoteTimer = null
 
   const scrollProgression = () => {
     const element = getScrollElement()
@@ -27,7 +30,23 @@ export const useReadingProgress = ({
 
   const cancel = () => {
     clearTimeout(timer)
+    clearTimeout(remoteTimer)
     timer = null
+    remoteTimer = null
+  }
+
+  const syncRemote = anchor => {
+    if (!saveRemote || !anchor) return
+    Promise.resolve(saveRemote(anchor)).catch(() => {})
+  }
+
+  const scheduleRemote = anchor => {
+    if (!saveRemote) return
+    clearTimeout(remoteTimer)
+    remoteTimer = setTimeout(() => {
+      remoteTimer = null
+      syncRemote(anchor)
+    }, remoteDelay)
   }
 
   const persist = () => {
@@ -35,14 +54,20 @@ export const useReadingProgress = ({
     timer = setTimeout(() => {
       timer = null
       const anchor = currentAnchor()
-      if (anchor) saveReadingProgress(anchor)
+      if (anchor) {
+        saveReadingProgress(anchor)
+        scheduleRemote(anchor)
+      }
     }, delay)
   }
 
   const flush = () => {
     cancel()
     const anchor = currentAnchor()
-    if (anchor) saveReadingProgress(anchor)
+    if (anchor) {
+      saveReadingProgress(anchor)
+      syncRemote(anchor)
+    }
     return anchor
   }
 

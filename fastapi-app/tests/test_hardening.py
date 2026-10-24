@@ -219,9 +219,13 @@ class ConfigurationTests(unittest.TestCase):
     def test_latest_migration_is_registered(self):
         from app.migrations.runner import MIGRATIONS
 
-        self.assertIs(MIGRATIONS[-1], v017_web_import_lifecycle)
+        from app.migrations import v018_dashboard_reading_progress, v019_announcements
+
+        self.assertIs(MIGRATIONS[-1], v019_announcements)
         self.assertEqual(v016_web_imports.VERSION, 16)
         self.assertEqual(v017_web_import_lifecycle.VERSION, 17)
+        self.assertEqual(v018_dashboard_reading_progress.VERSION, 18)
+        self.assertEqual(v019_announcements.VERSION, 19)
 
 
 class _MarkdownMigrationConnection:

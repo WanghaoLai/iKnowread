@@ -9,6 +9,6 @@ httpx~=0.28.1
 cryptography~=50.0.2
 ocrmypdf~=17.13.0
 pypdfium2>=5,<6
-Pillow>=12,<13
+Pillow>=13,<14
 # 回归测试以 sqlite 内存库运行，且发布门禁在生产镜像内执行测试，故需随镜像安装
 aiosqlite~=0.22.1

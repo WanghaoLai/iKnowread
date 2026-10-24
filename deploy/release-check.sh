@@ -35,6 +35,7 @@ fi
 # These values exist only to exercise Compose interpolation. They are not used
 # to start services and must never be replaced with production credentials.
 export APP_TAG=local
+export MYSQL_IMAGE_TAG=local
 export DB_PASSWORD='release-check-db-password-not-for-production'
 export MYSQL_ROOT_PASSWORD='release-check-root-password-not-for-production'
 export AUTH_SECRET='release-check-auth-secret-not-for-production-0123456789'
@@ -48,20 +49,33 @@ echo '[1/7] 校验 Compose 配置'
 python3 fastapi-app/scripts/verify_delivery_manifest.py
 docker compose --env-file /dev/null --profile web-import \
     -f compose.yaml -f deploy/compose.verify.yaml config --quiet
+docker compose --env-file /dev/null --profile web-import -f compose.yaml config --format json \
+    | python3 -c 'import json, sys; config = json.load(sys.stdin); app_tag, mysql_tag = sys.argv[1:]; services = config["services"]; assert services["db"]["image"] == f"iknowread-mysql:{mysql_tag}"; assert services["backend"]["image"] == f"iknowread-backend:{app_tag}"; assert services["web"]["image"] == f"iknowread-web:{app_tag}"; assert services["crawler"]["image"] == f"iknowread-crawler:{app_tag}"' \
+        "$APP_TAG" "$MYSQL_IMAGE_TAG"
 docker compose --env-file /dev/null --profile web-import \
     -f compose.yaml -f deploy/compose.verify.yaml config --format json \
     | python3 fastapi-app/scripts/verify_crawler_isolation.py
 
-echo '[2/7] 构建三个生产镜像'
-for service in db backend web; do
-    docker compose --env-file /dev/null build "$service"
+echo '[2/7] 构建四个生产镜像'
+for service in db backend web crawler; do
+    docker compose --env-file /dev/null --profile web-import build "$service"
 done
-docker compose --env-file /dev/null --profile web-import pull crawler
+for image in \
+    "iknowread-mysql:${MYSQL_IMAGE_TAG}" \
+    "iknowread-backend:${APP_TAG}" \
+    "iknowread-web:${APP_TAG}" \
+    "iknowread-crawler:${APP_TAG}"; do
+    docker image inspect "$image" >/dev/null || {
+        echo "构建后缺少本地镜像：${image}" >&2
+        exit 1
+    }
+done
 
 echo '[3/7] 在生产后端镜像中运行静态检查和回归测试'
 docker run --rm \
     -e "AUTH_SECRET=${AUTH_SECRET}" \
     -e PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    -e PIP_CACHE_DIR=/tmp/pip-cache \
     --mount "type=bind,src=${ROOT_DIR}/fastapi-app/tests,dst=/app/tests,readonly" \
     --mount "type=bind,src=${ROOT_DIR}/fastapi-app/scripts,dst=/app/scripts,readonly" \
     --mount "type=bind,src=${ROOT_DIR}/fastapi-app,dst=/source,readonly" \
@@ -91,9 +105,11 @@ docker run --rm \
     -e DOMAIN=localhost -e ACME_EMAIL=release-check@example.invalid \
     --entrypoint caddy "iknowread-web:${APP_TAG}" \
     validate --config /etc/caddy/Caddyfile --adapter caddyfile
-docker run --rm --entrypoint /bin/sh "iknowread-mysql:${APP_TAG}" \
+docker run --rm --entrypoint /bin/sh "iknowread-mysql:${MYSQL_IMAGE_TAG}" \
     -c 'test ! -e /usr/bin/mysqlsh && mysqld --version && mysql --version && mysqldump --version'
-docker run --rm --entrypoint /usr/local/bin/gosu "iknowread-mysql:${APP_TAG}" --version
+docker run --rm --entrypoint /usr/local/bin/gosu "iknowread-mysql:${MYSQL_IMAGE_TAG}" --version
+docker run --rm --entrypoint python "iknowread-crawler:${APP_TAG}" \
+    -c 'import importlib.metadata as metadata; expected = {"Crawl4AI": "0.9.4", "Brotli": "1.2.1", "pypdf": "6.21.2", "filelock": "4.2.1"}; assert all(metadata.version(package) == version for package, version in expected.items()), {package: metadata.version(package) for package in expected}'
 docker run --rm --read-only \
     --tmpfs /tmp:size=256m,mode=1777 \
     -e PYTHONPATH=/app -e OCR_ENABLED=true -e OCR_LANGUAGES=chi_sim+eng \
@@ -139,21 +155,39 @@ docker run --rm \
 cleanup_verify_stack
 trap - EXIT
 
-echo '[7/7] 镜像漏洞门禁'
+echo '[7/7] 镜像漏洞检查（全部严重项可见；已有修复版本的严重项阻断发布）'
 if [[ "$SCAN_IMAGES" == true ]]; then
     docker scout version >/dev/null
-    for image in backend web mysql; do
+    for image in backend web crawler; do
+        echo "iknowread-${image}:${APP_TAG}：未修复的 Critical/High（报告，不静默忽略）"
+        docker scout cves \
+            --only-severity critical,high \
+            --only-unfixed \
+            --only-vuln-packages \
+            --format only-packages \
+            "local://iknowread-${image}:${APP_TAG}"
+        echo "iknowread-${image}:${APP_TAG}：已有修复版本的 Critical/High（发布门禁）"
         docker scout cves --exit-code \
             --only-severity critical,high \
             --only-fixed \
+            --only-vuln-packages \
             --format packages \
             "local://iknowread-${image}:${APP_TAG}"
     done
+    echo "iknowread-mysql:${MYSQL_IMAGE_TAG}：未修复的 Critical/High（报告，不静默忽略）"
+    docker scout cves \
+        --only-severity critical,high \
+        --only-unfixed \
+        --only-vuln-packages \
+        --format only-packages \
+        "local://iknowread-mysql:${MYSQL_IMAGE_TAG}"
+    echo "iknowread-mysql:${MYSQL_IMAGE_TAG}：已有修复版本的 Critical/High（发布门禁）"
     docker scout cves --exit-code \
         --only-severity critical,high \
         --only-fixed \
+        --only-vuln-packages \
         --format packages \
-        "unclecode/crawl4ai:0.9.5@sha256:0b05666882bfb67f45d559a5b827839c54127b74aedd723f8ab338a3571b5fc9"
+        "local://iknowread-mysql:${MYSQL_IMAGE_TAG}"
 else
     echo '已跳过 Docker Scout；正式发布前请使用 --scan 再运行一次。'
 fi

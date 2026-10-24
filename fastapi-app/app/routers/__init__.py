@@ -6,7 +6,10 @@ from tortoise import Tortoise
 from app.common.result import Result
 from app.config import settings
 from app.database import verify_instance_lock
-from app.routers import account, ai, auth, document, files, highlights, notes, web_imports
+from app.routers import (
+    account, ai, announcements, auth, dashboard, document, files, highlights, notes,
+    reading_progress, web_imports,
+)
 from app.services import ocr_service
 from app.services import crawler_client
 from app.storage import run_storage_io
@@ -16,6 +19,8 @@ for router in (
     auth.router, account.router, document.router, files.router, ai.router,
     notes.router, highlights.router,
     web_imports.router,
+    dashboard.router, reading_progress.router,
+    announcements.router, announcements.admin_router,
 ):
     api_router.include_router(router)
 

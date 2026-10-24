@@ -1,16 +1,38 @@
 FROM python:3.12-slim-bookworm@sha256:34386ef0cb081344d7ec1c103ba398e6e9f64e9ab3a1509accc92a4e24a07258
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
     HOME=/tmp
 WORKDIR /app
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-       tesseract-ocr tesseract-ocr-eng tesseract-ocr-chi-sim \
-       fonts-noto-core fonts-noto-cjk ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    set -eux; \
+    rm -f /etc/apt/apt.conf.d/docker-clean; \
+    sed -i 's|http://deb.debian.org|https://deb.debian.org|g' /etc/apt/sources.list.d/debian.sources; \
+    for attempt in 1 2 3 4 5; do \
+        if apt-get -o APT::Update::Error-Mode=any \
+            -o Acquire::Retries=5 -o Acquire::https::Timeout=30 update; then \
+            break; \
+        fi; \
+        if [ "$attempt" = 5 ]; then exit 1; fi; \
+        sleep "$((attempt * 2))"; \
+    done; \
+    for attempt in 1 2 3 4 5; do \
+        if DEBIAN_FRONTEND=noninteractive \
+            apt-get -o Acquire::Retries=5 -o Acquire::https::Timeout=30 upgrade -y \
+            && DEBIAN_FRONTEND=noninteractive \
+            apt-get -o Acquire::Retries=5 -o Acquire::https::Timeout=30 install -y --no-install-recommends \
+                tesseract-ocr tesseract-ocr-eng tesseract-ocr-chi-sim \
+                fonts-noto-core fonts-noto-cjk ca-certificates; then \
+            break; \
+        fi; \
+        if [ "$attempt" = 5 ]; then exit 1; fi; \
+        sleep "$((attempt * 2))"; \
+    done; \
+    apt-get clean
 COPY fastapi-app/requirements.lock ./requirements.lock
-RUN pip install --no-cache-dir -r requirements.lock
+RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
+    pip install -r requirements.lock
 RUN ocrmypdf --version \
     && tesseract --list-langs | grep -Fx eng \
     && tesseract --list-langs | grep -Fx chi_sim

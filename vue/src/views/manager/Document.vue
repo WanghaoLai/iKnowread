@@ -1,7 +1,7 @@
 <template>
   <div>
 
-    <div class="card web-import-card">
+    <div id="web-import-section" class="card web-import-card">
       <div class="web-import-title">收藏网页</div>
       <div class="web-import-form">
         <el-input
@@ -56,7 +56,7 @@
       <div v-if="webJobsError" class="web-job-error web-job-list-error">{{ webJobsError }}</div>
     </div>
 
-    <div class="card upload-card">
+    <div id="upload-section" class="card upload-card">
       <el-upload
           class="doc-upload"
           drag
@@ -155,7 +155,8 @@
 </template>
 
 <script setup>
-import { onBeforeUnmount, reactive, ref } from "vue";
+import { nextTick, onBeforeUnmount, onMounted, reactive, ref } from "vue";
+import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from "element-plus";
 import { Search, Refresh, Delete, Document, UploadFilled, View } from "@element-plus/icons-vue";
 import { buildPreviewModel } from "@/utils/preview";
@@ -177,13 +178,15 @@ import { getCapabilities } from '@/api/auth'
 const ALLOWED_EXTS = ['pdf', 'docx', 'md']
 const MAX_SIZE = 50 * 1024 * 1024
 const MARKDOWN_MAX_SIZE = 5 * 1024 * 1024
+const route = useRoute()
+const initialName = typeof route.query.name === 'string' ? route.query.name.slice(0, 255) : null
 
 const data = reactive({
   tableData: [],
   total: 0,
   pageNum: 1,
   pageSize: 10,
-  name: null,
+  name: initialName,
   previewVisible: false,
   previewModel: null,
   webUrl: '',
@@ -485,6 +488,12 @@ const processingType = status => ({
 
 load()
 initializeWebImports()
+onMounted(async () => {
+  const target = ({ upload: 'upload-section', 'web-import': 'web-import-section' })[route.query.focus]
+  if (!target) return
+  await nextTick()
+  document.getElementById(target)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+})
 onBeforeUnmount(() => {
   webImportStopped = true
   webImportLoadVersion += 1

@@ -1,6 +1,9 @@
 import unittest
 
-from scripts.verify_crawler_isolation import CRAWLER_IMAGE, verify
+from scripts.verify_crawler_isolation import verify
+
+
+CRAWLER_IMAGE = "iknowread-crawler:release-20261022"
 
 
 def secure_config() -> dict:
@@ -28,8 +31,8 @@ class CrawlerIsolationTests(unittest.TestCase):
 
     def test_mutable_or_different_image_is_rejected(self):
         config = secure_config()
-        config["services"]["crawler"]["image"] = "unclecode/crawl4ai:0.9.5"
-        with self.assertRaisesRegex(AssertionError, "pinned"):
+        config["services"]["crawler"]["image"] = "iknowread-crawler:latest"
+        with self.assertRaisesRegex(AssertionError, "immutable"):
             verify(config)
 
     def test_internal_url_escape_hatch_is_rejected(self):

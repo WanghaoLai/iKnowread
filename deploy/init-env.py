@@ -38,6 +38,7 @@ try:
             "DOCUMENT_HIGHLIGHT_LIMIT=1000\n"
             "STORAGE_MIN_FREE_BYTES=2147483648\n"
             "APP_TAG=local\n"
+            "MYSQL_IMAGE_TAG=local\n"
         )
 except FileExistsError:
     parser.exit(1, "已有 .env，未做修改；如需调整请使用 nano .env。\n")

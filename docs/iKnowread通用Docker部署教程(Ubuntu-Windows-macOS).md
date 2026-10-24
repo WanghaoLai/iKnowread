@@ -532,7 +532,7 @@ docker compose config --quiet
 
 A 记录应指向服务器；若没有 IPv6，AAAA 应为空。配置检查成功时通常没有输出。不要随意执行不带 `--quiet` 的 `docker compose config` 后分享输出，因为它会展开密码。
 
-先执行一键发布前检查。它使用一次性占位配置校验 Compose，顺序构建三个生产镜像；执行 Ruff、生产后端镜像回归测试、前端 `npm ci` 与 `npm run check`、生产依赖审计；检查 Caddy、MySQL 和真实 OCR 运行能力；最后启动隔离栈验证网关、数据库约束和后端重启持久化。测试数量随源码变化，以本次输出为准。独立 OCR 检查不会开启正式服务的 OCR。隔离栈使用 172.30.31.0/24 网段及本机 13306、19090、18080、18443 端口，执行前确保它们未被占用；不要同时运行多份检查。验证栈不挂载生产旧数据目录，退出时删除自己的容器和卷。
+先执行一键发布前检查。它使用一次性占位配置校验 Compose，顺序构建数据库、后端、前端和 Crawl4AI 四个生产镜像；执行 Ruff、生产后端镜像回归测试、前端 `npm ci` 与 `npm run check`、生产依赖审计；检查 Caddy、MySQL、Crawl4AI 真实版本和 OCR 运行能力；最后启动隔离栈验证网关、数据库约束和后端重启持久化。测试数量随源码变化，以本次输出为准。独立 OCR 检查不会开启正式服务的 OCR。隔离栈使用 172.30.31.0/24 网段及本机 13306、19090、18080、18443 端口，执行前确保它们未被占用；不要同时运行多份检查。验证栈不挂载生产旧数据目录，退出时删除自己的容器和卷。
 ```bash
 # [Ubuntu 服务器] 发布检查（从项目根目录）
 sudo bash deploy/release-check.sh
@@ -868,22 +868,7 @@ sudo crontab -e
 
 ### 12. 版本更新、迁移兼容与回滚
 
-每次更新先确认有可恢复备份，再构建。数据库启动迁移可能改变结构，因此“只换回旧镜像”不一定能安全回退。
-
-```bash
-# [Ubuntu 服务器]
-cd /opt/iknowread
-sudo bash deploy/backup.sh
-```
-
-可额外保留当前镜像，假设 `.env` 中 `APP_TAG=local`：
-
-```bash
-# [Ubuntu 服务器] 保护原有 local 镜像标签，避免被后续构建覆盖
-sudo docker image tag iknowread-backend:local iknowread-backend:previous
-sudo docker image tag iknowread-web:local iknowread-web:previous
-sudo docker image tag iknowread-mysql:local iknowread-mysql:previous
-```
+每次更新都必须先形成可恢复备份和精确镜像回滚点。不要手工覆盖 `local` 标签；本节后面的 `deploy/update.sh` 会按正在运行的容器镜像创建不可变回滚标签，并在切换前调用备份和隔离恢复校验。数据库启动迁移可能改变结构，因此镜像回滚不能替代数据备份。
 
 将新版源码按 §4 的打包上传步骤重新打包并上传。更新时不能直接覆盖解压：普通解压不会删除新版已经移除的旧源码，可能让旧模块继续进入构建上下文。先校验到临时目录，再用 `rsync --delete` 精确同步，同时保护生产配置和数据：
 
@@ -920,31 +905,31 @@ sudo docker run --rm -u 0 \
 
 先用 `sudo docker volume ls | grep caddy` 核对卷名；如果 Compose 项目名不是 `iknowread`，应使用实际卷名，不能照抄后误改其他项目。该命令只调整 Caddy 证书和配置卷，不要用于 MySQL 卷。
 
-为控制 4GB 机器在构建期间的内存峰值，可安排维护窗口。发布检查已经包含构建、测试和审计，通过后再启动：
+发布前先在开发机或 CI 对与服务器相同的目标架构执行完整检查；它包含四镜像构建、测试、隔离运行验收和 Docker Scout 扫描：
 
 ```bash
-# [Ubuntu 服务器] 在维护窗口执行，已备份并保留 previous 镜像
-sudo docker compose stop
-sudo bash deploy/release-check.sh --scan
-sudo docker compose up -d --no-build
-sudo docker compose ps
-curl -fsS https://read.example.com/api/ready
+# [开发机/CI]
+bash deploy/release-check.sh --scan
 ```
 
-服务器没有 Scout 时，只能在同一源码与目标架构已于开发机/CI 扫描通过的前提下，将第二条改为 `sudo bash deploy/release-check.sh`。一条成功后再执行下一条。如果发布检查失败，停止的旧容器仍指向原镜像，可先执行 `sudo docker compose start` 恢复旧服务，再修复源码；不要用失败过程中部分生成的 `local` 镜像创建新容器，也不要反复运行全量清理命令。备份中的部署配置和源码可用于恢复原版本。
+服务器同步新源码后不需要先停止服务。更新脚本会锁定并发更新，从当前运行容器保存精确镜像快照，构建唯一版本标签，创建并隔离恢复验证备份，再切换容器并等待健康检查；失败时自动恢复运行快照：
+
+```bash
+# [Ubuntu 服务器] 普通应用更新，不重启 MySQL
+cd /opt/iknowread
+sudo bash deploy/update.sh
+
+# [Ubuntu 服务器] 仅当发布包含 MySQL 镜像修复时，在维护窗口使用
+sudo bash deploy/update.sh --include-db
+```
+
+`--include-db` 只更新本项目固定的 MySQL 8.4 镜像，不升级数据库主版本，也不替换数据卷。它会为当前数据库容器创建回滚镜像，并在切换失败时与应用一起回滚。服务器无需安装 Scout，但前提是同一源码与目标架构已在开发机或 CI 通过带 `--scan` 的发布检查。不要用失败过程中部分生成的镜像手工创建容器，也不要反复运行全量清理命令。
 
 **原稿在 2026-10-19 的源码快照记录**迁移共有 14 个版本：版本 7 增加会话撤销；版本 8～10 依次增加文档内容版本、统一来源锚点和持久化高亮；版本 11 增加回收站状态，版本 12 规范化用户名，版本 13 增加文档处理任务状态，版本 14 清理未实现任务类型的占位记录。应用还会为既有迁移记录补写校验和，以后若已执行的迁移文件被改动会拒绝启动。升级会保留账号、文档、笔记、AI 配置和已有文件，不应手工修改 `schema_migration`、删除字段或改写历史迁移文件。升级前签发的旧格式会话可能失效，用户需要重新登录。
 
 正常更新**不要顺手更新 MySQL 大版本**。需要升级数据库时，应先查对应版本的官方升级路径，并在备份副本上验证。
 
-仅当数据库结构与旧代码兼容时，可以在 `.env` 将 `APP_TAG=local` 改成 `APP_TAG=previous`，然后执行：
-
-```bash
-# [Ubuntu 服务器] 仅确认数据库结构兼容旧程序后可尝试镜像回滚
-sudo docker compose up -d --no-build db backend web
-```
-
-回滚后执行 `docker compose ps`、`/api/ready` 和第 8 节业务检查。再次升级前把 `.env` 的 `APP_TAG` 改回 `local`。若迁移不兼容，按下一节恢复备份配套的数据、源码、配置；恢复会丢失备份时间点之后的新改动，因此应先另存当前状态。
+激活阶段健康检查失败时，更新脚本会自动把 `.env` 和容器恢复到本次输出的回滚标签。若更新已成功而后续业务验收才发现问题，仅在确认数据库结构兼容旧程序后，才可把 `.env` 的 `APP_TAG` 改为脚本保留的回滚标签；如果本次使用了 `--include-db`，`MYSQL_IMAGE_TAG` 也应改为同一个回滚标签，然后执行 `sudo docker compose up -d --wait --wait-timeout 300 --no-build`。回滚后检查 `docker compose ps`、`/api/ready` 和第 8 节业务流程。若迁移不兼容，按下一节恢复配套备份；恢复会丢失备份时间点之后的新改动，因此应先另存当前状态。
 
 **桌面系统参与发布时**：推荐只负责构建、在目标架构运行门禁与传输“已检查”的镜像。生产上的数据库迁移、备份和版本切换仍在 Ubuntu 执行。严禁以“桌面构建成功”替代生产 `ready`、HTTPS 和兼容性验证。
 

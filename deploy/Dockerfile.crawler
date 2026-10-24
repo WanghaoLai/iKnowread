@@ -1,0 +1,110 @@
+FROM unclecode/crawl4ai:0.9.4@sha256:9021b3cb5c6f12570bbcd5395638495e0a06969b3148e377b953d174af2ebc9b AS upstream
+
+# Upgrade the complete Python environment before it crosses the production
+# stage boundary. Archiving the resolved filesystem prevents superseded wheels
+# from remaining addressable in an earlier production layer.
+USER root
+RUN python -m pip install --no-cache-dir --upgrade \
+        'Pillow==13.0.0' \
+        'PyJWT==2.15.1' \
+        'certifi==2026.10.19' \
+        'aiohttp==3.14.5' \
+        'urllib3==2.8.0' \
+        'Brotli==1.2.1' \
+        'pypdf==6.21.2' \
+        'filelock==4.2.1' \
+        'supervisor==4.3.0' \
+    && python -m pip check \
+    && tar -C /usr/local/lib/python3.12/site-packages \
+        --exclude='./pip' --exclude='./pip-*.dist-info' \
+        -cf /tmp/crawler-site-packages.tar .
+
+# Rebuild the runtime on a clean, digest-pinned Python base. The official image
+# is used only as a reviewed source for Crawl4AI 0.9.4, its API service and the
+# matching Playwright browser; its source tree, tests, core dumps, package
+# caches and stale build-layer SBOM never enter the production image.
+FROM python:3.12.14-slim-bookworm@sha256:392307d22300de8b5986851a12d9176dfc0fc073e65bf6523ebd7dcbeb23564e
+
+ENV PATH=/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin \
+    LANG=C.UTF-8 \
+    C4AI_VERSION=0.9.4 \
+    PYTHONFAULTHANDLER=1 \
+    PYTHONHASHSEED=random \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    REDIS_HOST=localhost \
+    REDIS_PORT=6379 \
+    PYTHON_ENV=production
+
+COPY --from=upstream /tmp/crawler-site-packages.tar /tmp/crawler-site-packages.tar
+COPY --from=upstream /usr/local/bin/ /usr/local/bin/
+
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    sed -i 's|http://deb.debian.org|https://deb.debian.org|g; s|http://security.debian.org|https://security.debian.org|g' \
+        /etc/apt/sources.list.d/debian.sources \
+    && for attempt in 1 2 3 4 5; do \
+        apt-get -o APT::Update::Error-Mode=any \
+            -o Acquire::Retries=5 \
+            -o Acquire::https::Timeout=30 \
+            update && break; \
+        if [ "$attempt" = 5 ]; then exit 1; fi; \
+        sleep "$((attempt * 2))"; \
+    done \
+    && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y \
+    && tar -C /usr/local/lib/python3.12/site-packages \
+        -xf /tmp/crawler-site-packages.tar \
+    && rm /tmp/crawler-site-packages.tar \
+    && DEBIAN_FRONTEND=noninteractive playwright install-deps chromium \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        curl redis-server \
+    && python -m pip check \
+    && rm -rf /usr/local/lib/python3.12/site-packages/pip \
+        /usr/local/lib/python3.12/site-packages/pip-*.dist-info \
+        /usr/local/bin/pip /usr/local/bin/pip3 /usr/local/bin/pip3.12 \
+    && groupadd --system --gid 999 appuser \
+    && useradd --system --uid 999 --gid 999 --home-dir /home/appuser --create-home appuser \
+    && install -d -o appuser -g appuser -m 0700 /var/lib/redis \
+    && rm -rf /root/.cache
+
+COPY --from=upstream --chown=999:999 /home/appuser/.cache/ms-playwright/ /home/appuser/.cache/ms-playwright/
+COPY --from=upstream --chown=999:999 \
+    /app/api.py \
+    /app/artifacts.py \
+    /app/auth.py \
+    /app/auth_gate.py \
+    /app/config.yml \
+    /app/crawler_pool.py \
+    /app/egress_broker.py \
+    /app/egress_proxy.py \
+    /app/entrypoint.sh \
+    /app/governor.py \
+    /app/hook_registry.py \
+    /app/job.py \
+    /app/llm_broker.py \
+    /app/mcp_bridge.py \
+    /app/monitor.py \
+    /app/monitor_routes.py \
+    /app/redis_config.py \
+    /app/schemas.py \
+    /app/server.py \
+    /app/supervisord.conf \
+    /app/utils.py \
+    /app/webhook.py \
+    /app/work_queue.py \
+    /app/
+COPY --from=upstream --chown=999:999 /app/assets/ /app/assets/
+COPY --from=upstream --chown=999:999 /app/monitor/ /app/monitor/
+COPY --from=upstream --chown=999:999 /app/playground/ /app/playground/
+COPY --from=upstream --chown=999:999 /app/static/ /app/static/
+
+LABEL org.opencontainers.image.title="iKnowread Crawl4AI runtime" \
+      org.opencontainers.image.version="0.9.4" \
+      org.opencontainers.image.source="https://github.com/unclecode/crawl4ai"
+
+WORKDIR /app
+USER appuser
+EXPOSE 11235
+CMD ["bash", "entrypoint.sh"]

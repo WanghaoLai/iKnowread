@@ -2,6 +2,17 @@
 	email {$ACME_EMAIL}
 }
 
+# Container-local liveness endpoint. It deliberately has no backend dependency;
+# Compose already waits for the backend before starting this service.
+http://127.0.0.1 {
+	@local_health {
+		path /healthz
+		remote_ip 127.0.0.1 ::1
+	}
+	respond @local_health "ok" 200
+	respond 404
+}
+
 {$DOMAIN} {
 	encode zstd gzip
 
@@ -32,6 +43,15 @@
 
 	handle {
 		root * /srv
+
+		# Vite fingerprints /assets files. Cache those immutable files for a
+		# year, while forcing every navigation to revalidate the SPA entry so a
+		# newly deployed release cannot be stranded behind an old index.html.
+		@immutable path /assets/*
+		header @immutable Cache-Control "public, max-age=31536000, immutable"
+		@app_shell not path /assets/*
+		header @app_shell Cache-Control "no-cache, no-store, must-revalidate"
+
 		try_files {path} /index.html
 		file_server
 	}

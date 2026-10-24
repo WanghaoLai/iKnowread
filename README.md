@@ -27,7 +27,7 @@
 
 ### Docker 部署（推荐）
 
-面向 Ubuntu 24.04（4 核 4GB）的完整步骤见 [Docker 部署教程](docs/Ubuntu-24.04-Docker部署教程.md)。最短路径：
+面向 Ubuntu 24.04（4 核 4GB）的完整步骤见 [Docker 部署教程](docs/Ubuntu-24.04-Docker部署教程.md)；已有线上版本从本地同步代码时使用 [线上服务器代码同步更新教程](docs/iKnowread线上服务器代码同步更新教程.md)。最短路径：
 
 ```bash
 # 域名与证书联系人邮箱（不覆盖已有 .env）
@@ -43,6 +43,18 @@ docker compose --profile web-import up -d --build
 首次启动若无管理员，系统自动创建 `admin`，随机密码写入持久卷中的 `/app/data/.initial-admin-password`（权限 0600）。可执行 `docker compose exec backend cat /app/data/.initial-admin-password` 读取一次性密码。
 
 从旧版升级时，启动前置任务会在新持久卷为空的前提下自动导入原 `runtime/app-data`；卷内已有数据时会拒绝自动合并，避免覆盖现有文件。
+
+已有线上版本更新时，不要直接覆盖 `.env`，使用健康门禁更新脚本：
+
+```bash
+git pull --ff-only
+bash deploy/update.sh
+
+# 仅在本次发布包含 MySQL 镜像修复且已安排维护窗口时使用
+bash deploy/update.sh --include-db
+```
+
+脚本会先从当前运行容器创建不可变回滚镜像，再构建带唯一版本标签的应用镜像，随后创建并隔离恢复验证数据库与文件备份，最后切换容器并等待健康检查。失败时自动恢复该运行快照；MySQL 使用独立的 `MYSQL_IMAGE_TAG`，普通更新不会重启数据库。`--include-db` 会把正在运行的 MySQL 镜像一并快照、构建、切换和回滚，必须在维护窗口使用，但不会改变 MySQL 主版本或数据卷。
 
 ### 本地开发
 
@@ -109,6 +121,8 @@ docs/           部署教程
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `AUTH_SECRET` | 空（必填） | 会话签名密钥；生产留空拒绝启动 |
+| `APP_TAG` | `local` | 当前 backend/web 发布标签；线上更新由 `deploy/update.sh` 原子维护 |
+| `MYSQL_IMAGE_TAG` | `local` | MySQL 镜像标签，独立于应用发布，避免普通更新重启数据库 |
 | `ALLOW_REGISTRATION` | `false` | 自助注册开关 |
 | `DB_HOST` / `DB_PORT` / `DB_USER` / `DB_PASSWORD` / `DB_DATABASE` | localhost / 3306 / iknowread / 空 / iknowread | MySQL 连接 |
 | `CORS_ORIGINS` | 空 | 可信前端源，逗号分隔；生产禁用 `*` |
@@ -160,4 +174,5 @@ bash deploy/release-check.sh
 
 - **备份**：`deploy/backup.sh`（flock 防并发，停写保证数据库与文件快照一致）；`deploy/verify-backup.sh` 验证备份可恢复。
 - **发布门禁**：`deploy/release-check.sh` 在发布前跑完整校验。
+- **线上更新**：`deploy/update.sh` 先备份，再按唯一镜像标签切换并等待健康检查；失败自动恢复上一应用版本。
 - **AI Key 备份提醒**：`AI_CONFIG_KEY` 默认生成于 `fastapi-app/data/.ai-config-key`，与数据库需分别持久化；丢失后各账号需重填 API Key。

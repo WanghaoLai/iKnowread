@@ -62,11 +62,11 @@ export const useDocumentLoader = ({
     error.value = ''
     loading.value = true
     loadingText.value = '加载中...'
-    const restoration = getRestoration()
     await destroyPdf()
     if (docxRef.value) docxRef.value.innerHTML = ''
     if (markdownRef.value) markdownRef.value.innerHTML = ''
     try {
+      const restoration = await getRestoration()
       const model = getModel()
       if (model.engine === 'docx' || model.engine === 'markdown') {
         const staging = document.createElement('div')
