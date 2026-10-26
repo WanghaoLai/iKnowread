@@ -14,7 +14,7 @@
         <button type="button" aria-label="关闭高亮备注" @click="$emit('close')"><el-icon><Close /></el-icon></button>
       </header>
       <blockquote>“{{ detail.item.selected_text }}”</blockquote>
-      <template v-if="detail.editing">
+      <template v-if="detail.editing && !readOnly">
         <textarea
             :value="detail.remark"
             maxlength="12000"
@@ -35,8 +35,8 @@
         <span>{{ detail.item.model || '手动高亮' }}</span>
         <div>
           <button type="button" @click="$emit('locate')"><el-icon><Location /></el-icon>定位</button>
-          <button type="button" @click="$emit('edit')"><el-icon><Edit /></el-icon>编辑</button>
-          <button type="button" class="danger" @click="$emit('remove', detail.item)"><el-icon><Delete /></el-icon>删除</button>
+          <button v-if="!readOnly" type="button" @click="$emit('edit')"><el-icon><Edit /></el-icon>编辑</button>
+          <button v-if="!readOnly" type="button" class="danger" @click="$emit('remove', detail.item)"><el-icon><Delete /></el-icon>删除</button>
         </div>
       </footer>
     </aside>
@@ -47,7 +47,7 @@
 import { ref } from 'vue'
 import { Close, Delete, Edit, Location } from '@element-plus/icons-vue'
 
-defineProps({ detail: { type: Object, required: true } })
+defineProps({ detail: { type: Object, required: true }, readOnly: { type: Boolean, default: false } })
 defineEmits(['close', 'edit', 'cancel-edit', 'save', 'locate', 'remove', 'update:remark'])
 
 const root = ref()

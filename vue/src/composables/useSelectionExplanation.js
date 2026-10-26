@@ -38,6 +38,7 @@ const normalizeSelection = value => value
   .trim()
 
 export const useSelectionExplanation = ({
+  canWrite = () => true,
   getDocumentId,
   getContentVersion,
   getSourceModel,
@@ -194,6 +195,7 @@ export const useSelectionExplanation = ({
   }
 
   const toggleHighlight = () => {
+    if (!canWrite()) return
     selectionHighlight.open = !selectionHighlight.open
     if (selectionHighlight.open && !selectionHighlight.remarkTouched && !selectionHighlight.remark) {
       selectionHighlight.remark = explain.answer || ''
@@ -202,6 +204,7 @@ export const useSelectionExplanation = ({
   }
 
   const saveHighlight = async () => {
+    if (!canWrite()) return
     if (selectionHighlight.saving || selectionHighlight.saved || !isSourceAnchor(explain.sourceAnchor)) return
     const documentId = Number(getDocumentId())
     if (!Number.isInteger(documentId) || documentId < 1) {
@@ -242,6 +245,7 @@ export const useSelectionExplanation = ({
   }
 
   const saveNote = async () => {
+    if (!canWrite()) return
     if (!explain.answer || explain.noteSaving || explain.noteSaved) return
     const documentId = Number(getDocumentId())
     if (!Number.isInteger(documentId) || documentId < 1) {

@@ -6,7 +6,7 @@ from tortoise.transactions import in_transaction
 
 from app.common.exception_handler import CustomException
 from app.config import settings
-from app.dependencies import CurrentAccount, require_document_owner
+from app.dependencies import CurrentAccount
 from app.models import Account, Document, Highlight
 from app.schemas.highlight import HighlightCreate, HighlightPublic, HighlightUpdate
 
@@ -27,7 +27,8 @@ async def _owned_document(current: CurrentAccount, document_id: int) -> Document
     document = await Document.get_or_none(id=document_id, deleted_at__isnull=True)
     if document is None:
         raise CustomException("文档不存在", status_code=404)
-    require_document_owner(current, document)
+    from app.services import experience_service
+    await experience_service.require_document_read(current, document)
     return document
 
 
@@ -46,15 +47,29 @@ async def list_current(
     document = await _owned_document(current, document_id)
     if document_version != document.content_version:
         raise CustomException("文档内容已更新，请刷新后查看高亮", status_code=409)
+    from app.services import experience_service
+    owner_id = current.id
+    read_only = False
+    if current.is_experience:
+        policy = await experience_service.require_enabled(current)
+        if not policy.show_highlights:
+            return []
+        owner_id = document.account_id
+        read_only = True
     records = await Highlight.filter(
-        account_id=current.id,
+        account_id=owner_id,
         document_id=document.id,
         document_version=document_version,
     ).order_by("-created_at", "-id").limit(max(1, settings.DOCUMENT_HIGHLIGHT_LIMIT))
-    return [serialize(record) for record in records]
+    result = [serialize(record) for record in records]
+    for item in result:
+        item["read_only"] = read_only
+    return result
 
 
 async def create(current: CurrentAccount, payload: HighlightCreate) -> dict:
+    from app.services import experience_service
+    experience_service.deny_experience_write(current, "添加高亮")
     document = await _owned_document(current, payload.document_id)
     _validate_anchor(document, payload.source_anchor)
     anchor = payload.source_anchor.model_dump()

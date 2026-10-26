@@ -8,6 +8,7 @@ from app.common.result import PageInfo, Result
 from app.dependencies import CurrentAccount, get_current_account
 from app.schemas.note import NoteCreate, NoteExportRequest, NoteUpdate
 from app.services import note_service
+from app.services import experience_service
 
 router = APIRouter(prefix=NOTES_PREFIX)
 
@@ -36,15 +37,15 @@ async def select_page(
     page_size: int = Query(default=12, alias="pageSize", ge=1, le=100),
     current: CurrentAccount = Depends(get_current_account),
 ):
-    page = await note_service.select_page(
-        current.id, keyword, document_id, unlinked, document_name, sort, page_num, page_size
+    page = await note_service.select_page_current(
+        current, keyword, document_id, unlinked, document_name, sort, page_num, page_size
     )
     return Result.success(PageInfo(**page))
 
 
 @router.get(NOTES_SUMMARY_ROUTE)
 async def summary(current: CurrentAccount = Depends(get_current_account)):
-    return Result.success(await note_service.summary(current.id))
+    return Result.success(await note_service.summary_current(current))
 
 
 @router.get(NOTES_EXPORT_ROUTE)
@@ -56,6 +57,7 @@ async def export_notes(
     sort: str = Query(default="newest", pattern="^(newest|oldest|document)$"),
     current: CurrentAccount = Depends(get_current_account),
 ):
+    experience_service.deny_experience_write(current, "导出笔记")
     content = await note_service.export_markdown(
         current.id, keyword, document_id, unlinked, document_name, sort
     )
@@ -67,6 +69,7 @@ async def export_notes_by_scope(
     payload: NoteExportRequest,
     current: CurrentAccount = Depends(get_current_account),
 ):
+    experience_service.deny_experience_write(current, "导出笔记")
     if payload.scope == "all":
         content = await note_service.export_markdown(
             current.id, "", None, False, None, "document"
@@ -98,6 +101,7 @@ async def update_note(
     payload: NoteUpdate,
     current: CurrentAccount = Depends(get_current_account),
 ):
+    experience_service.deny_experience_write(current, "编辑笔记")
     return Result.success(await note_service.update(current.id, note_id, payload))
 
 
@@ -106,5 +110,6 @@ async def delete_note(
     note_id: int,
     current: CurrentAccount = Depends(get_current_account),
 ):
+    experience_service.deny_experience_write(current, "删除笔记")
     await note_service.delete(current.id, note_id)
     return Result.success()

@@ -15,7 +15,7 @@ async def get_reading_progress(
     current: CurrentAccount = Depends(get_current_account),
 ):
     return Result.success(
-        await reading_progress_service.get_current(current.id, document_id)
+        await reading_progress_service.get_current(current, document_id)
     )
 
 
@@ -25,5 +25,5 @@ async def save_reading_progress(
     current: CurrentAccount = Depends(get_current_account),
 ):
     return Result.success(
-        await reading_progress_service.save(current.id, payload.source_anchor)
+        await reading_progress_service.save(current, payload.source_anchor)
     )

@@ -24,6 +24,8 @@ from app.migrations import (
     v017_web_import_lifecycle,
     v018_dashboard_reading_progress,
     v019_announcements,
+    v020_experience_account,
+    v021_bootstrap_experience_account,
 )
 
 MIGRATIONS = (
@@ -46,11 +48,33 @@ MIGRATIONS = (
     v017_web_import_lifecycle,
     v018_dashboard_reading_progress,
     v019_announcements,
+    v020_experience_account,
+    v021_bootstrap_experience_account,
 )
+
+# v020 was exercised locally before its first release and then corrected to
+# remove MySQL's deprecated VALUES(col) upsert syntax. Accept only those exact
+# pre-release checksums once, adopt the corrected checksum, and keep rejecting
+# every other form of applied-migration drift.
+LEGACY_MIGRATION_CHECKSUMS = {
+    20: frozenset(
+        {
+            "20b9ce4606e0cd3533aa780c42c67918b45d8f4119d53798214f04de244c4602",
+            "9739dc7522c72ca2b74635aaa17ea61be9cad1e459c1cf332d640100f4b4059c",
+        }
+    ),
+}
 
 
 def migration_checksum(migration) -> str:
     return hashlib.sha256(Path(migration.__file__).read_bytes()).hexdigest()
+
+
+def migration_checksum_is_compatible(
+    version: int, recorded: str | None, current: str
+) -> bool:
+    """Allow current content or an explicitly reviewed pre-release checksum."""
+    return recorded == current or recorded in LEGACY_MIGRATION_CHECKSUMS.get(version, ())
 
 
 async def run_migrations() -> None:
@@ -60,7 +84,7 @@ async def run_migrations() -> None:
     async with in_transaction("default") as connection:
         lock_rows = await connection.execute_query_dict(
             "SELECT GET_LOCK('iknowread_schema_migration', 60) AS acquired"
-            )
+        )
         if not lock_rows or int(lock_rows[0]["acquired"] or 0) != 1:
             raise RuntimeError("无法取得数据库迁移锁，请确认没有其他实例同时启动")
         try:
@@ -96,8 +120,15 @@ async def run_migrations() -> None:
                     if migration.VERSION in applied:
                         recorded = applied[migration.VERSION].get("checksum")
                         if recorded and recorded != checksum:
-                            raise RuntimeError(
-                                f"迁移文件 v{migration.VERSION:03d} 已在应用后被修改，拒绝启动"
+                            if not migration_checksum_is_compatible(
+                                migration.VERSION, recorded, checksum
+                            ):
+                                raise RuntimeError(
+                                    f"迁移文件 v{migration.VERSION:03d} 已在应用后被修改，拒绝启动"
+                                )
+                            await connection.execute_query(
+                                "UPDATE `schema_migration` SET `checksum`=%s WHERE `version`=%s",
+                                [checksum, migration.VERSION],
                             )
                         if not recorded:
                             # Existing installations predate checksums. Adopt the

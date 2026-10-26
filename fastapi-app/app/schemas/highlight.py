@@ -58,3 +58,4 @@ class HighlightPublic(BaseModel):
     model: str | None
     created_at: datetime
     updated_at: datetime
+    read_only: bool = False

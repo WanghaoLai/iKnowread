@@ -12,7 +12,12 @@
         <el-button type="primary" :icon="Plus" @click="handleAdd">新增</el-button>
       </div>
       <el-table v-loading="loading" :data="data.tableData" stripe>
-        <el-table-column label="用户名" prop="username"></el-table-column>
+        <el-table-column label="用户名" prop="username">
+          <template #default="scope">
+            {{ scope.row.username }}
+            <el-tag v-if="scope.row.is_experience" size="small" type="warning" effect="plain">体验账号</el-tag>
+          </template>
+        </el-table-column>
         <el-table-column label="名称" prop="name"></el-table-column>
         <el-table-column label="头像">
           <template #default="scope">
@@ -25,7 +30,7 @@
         <el-table-column label="操作" align="center" width="220">
           <template #default="scope">
             <el-button type="primary" :icon="Edit" @click="handleEdit(scope.row)">编辑</el-button>
-            <el-button type="danger" :icon="Delete" @click="handleDelete(scope.row.id)">删除</el-button>
+            <el-button type="danger" :icon="Delete" :disabled="scope.row.is_experience" @click="handleDelete(scope.row.id)">删除</el-button>
           </template>
         </el-table-column>
       </el-table>

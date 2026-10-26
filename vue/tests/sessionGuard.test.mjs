@@ -31,3 +31,32 @@ test('a hanging session request aborts instead of freezing navigation', async ()
     error => error?.name === 'TimeoutError',
   )
 })
+
+test('experience sessions include the server-enforced policy', async () => {
+  const urls = []
+  const fetchImpl = async url => {
+    urls.push(url)
+    if (url === '/api/me') {
+      return { ok: true, json: async () => ({
+        code: '200', data: { id: 9, username: 'test', is_experience: true },
+      }) }
+    }
+    return { ok: true, json: async () => ({
+      code: '200', data: { is_experience: true, enabled: true, ai_remaining_today: 3 },
+    }) }
+  }
+
+  const user = await fetchVerifiedSession('/api', { fetchImpl })
+  assert.deepEqual(urls, ['/api/me', '/api/experience/me'])
+  assert.equal(user.experience_policy.ai_remaining_today, 3)
+})
+
+test('disabled experience sessions cannot enter the application', async () => {
+  const fetchImpl = async url => ({
+    ok: true,
+    json: async () => url === '/api/me'
+      ? { code: '200', data: { id: 9, is_experience: true } }
+      : { code: '200', data: { is_experience: true, enabled: false } },
+  })
+  await assert.rejects(fetchVerifiedSession('/api', { fetchImpl }), /disabled/)
+})

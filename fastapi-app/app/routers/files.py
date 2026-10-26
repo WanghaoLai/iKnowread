@@ -11,6 +11,7 @@ from app.common.result import Result
 from app.dependencies import CurrentAccount, get_current_account
 from app.models import Account, Document
 from app.services import account_service
+from app.services import experience_service
 from app.services.account_service import RELATIVE_PREFIX
 from app.storage import get_storage, run_storage_io
 from app.services.resource_limits import (
@@ -65,6 +66,7 @@ async def upload_file(
     role: str = Form(None),
     current: CurrentAccount = Depends(get_current_account),
 ):
+    experience_service.deny_experience_write(current, "上传头像")
     await validate_avatar(file)
     await ensure_temporary_capacity(int(file.size or 0))
     storage = get_storage()

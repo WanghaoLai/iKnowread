@@ -7,6 +7,7 @@ from app.dependencies import CurrentAccount, get_current_account
 from app.schemas.account import AccountPublic, LoginRequest, PasswordUpdateRequest, RegisterRequest
 from app.security import issue_session_token, SESSION_COOKIE, SESSION_MAX_AGE
 from app.services import auth_service, captcha_service
+from app.services import experience_service
 from app.services.auth_guard import limit_auth
 
 router = APIRouter()
@@ -79,6 +80,7 @@ async def update_password(
     request: Request,
     current: CurrentAccount = Depends(get_current_account),
 ):
+    experience_service.deny_experience_write(current, "修改密码")
     await limit_auth(request, "password", str(current.id))
     await auth_service.update_password(
         current.id, account.password, account.newPassword

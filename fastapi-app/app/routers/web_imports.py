@@ -10,6 +10,7 @@ from app.common.result import Result
 from app.dependencies import CurrentAccount, get_current_account
 from app.schemas.web_import import WebImportCreate
 from app.services import web_import_service
+from app.services import experience_service
 
 
 router = APIRouter(prefix=WEB_IMPORTS_PREFIX)
@@ -21,17 +22,20 @@ async def create_web_import(
     request: Request,
     current: CurrentAccount = Depends(get_current_account),
 ):
+    experience_service.deny_experience_write(current, "导入网页")
     await web_import_service.limit(request, current.id)
     return Result.success(await web_import_service.create(current.id, body.url))
 
 
 @router.get("")
 async def list_web_imports(limit: int = Query(20, ge=1, le=100), current: CurrentAccount = Depends(get_current_account)):
+    experience_service.deny_experience_write(current, "使用网页导入")
     return Result.success(await web_import_service.list_for_account(current.id, limit))
 
 
 @router.get(WEB_IMPORT_ITEM_ROUTE)
 async def get_web_import(job_id: int, current: CurrentAccount = Depends(get_current_account)):
+    experience_service.deny_experience_write(current, "使用网页导入")
     job = await web_import_service.get_for_account(job_id, current.id)
     return Result.success(web_import_service.serialize(job))
 
@@ -42,6 +46,7 @@ async def retry_web_import(
     request: Request,
     current: CurrentAccount = Depends(get_current_account),
 ):
+    experience_service.deny_experience_write(current, "重试网页导入")
     await web_import_service.limit(request, current.id)
     return Result.success(await web_import_service.retry(job_id, current.id))
 
@@ -51,6 +56,7 @@ async def cancel_web_import(
     job_id: int,
     current: CurrentAccount = Depends(get_current_account),
 ):
+    experience_service.deny_experience_write(current, "取消网页导入")
     return Result.success(await web_import_service.cancel(job_id, current.id))
 
 
@@ -59,5 +65,6 @@ async def delete_web_import(
     job_id: int,
     current: CurrentAccount = Depends(get_current_account),
 ):
+    experience_service.deny_experience_write(current, "删除网页导入任务")
     await web_import_service.delete(job_id, current.id)
     return Result.success()

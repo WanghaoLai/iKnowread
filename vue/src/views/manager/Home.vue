@@ -11,6 +11,11 @@
           <div class="welcome-decoration" aria-hidden="true"><Reading /></div>
         </section>
 
+        <section v-if="isExperience" class="experience-notice" aria-label="体验账号限制">
+          <div><strong>当前为在线体验账号</strong><span>仅可阅读管理员共享文档；高亮、笔记、上传、导入和账户设置均为只读或不可用。</span></div>
+          <el-tag type="success" effect="dark">AI 今日剩余 {{ experiencePolicy.ai_remaining_today || 0 }} 次</el-tag>
+        </section>
+
         <form class="home-search" role="search" @submit.prevent="searchDocuments">
           <el-icon aria-hidden="true"><Search /></el-icon>
           <input v-model.trim="searchKeyword" type="search" maxlength="255" aria-label="搜索文档" placeholder="搜索文档、知识和笔记...">
@@ -146,7 +151,12 @@ let refreshTimer = null
 let stopped = false
 let loadVersion = 0
 
-const quickActions = [
+const isExperience = Boolean(user.is_experience)
+const experiencePolicy = user.experience_policy || {}
+const quickActions = isExperience ? [
+  { label: '共享文档', description: '浏览管理员开放的内容', icon: markRaw(FolderOpened), to: '/manager/document' },
+  { label: '在线阅读', description: '选择文字使用 AI 解释', icon: markRaw(Reading), to: '/manager/reader' },
+] : [
   { label: '上传文档', description: 'PDF、DOCX、Markdown', icon: markRaw(Upload), to: '/manager/document?focus=upload' },
   { label: '导入网页', description: '收藏网页到知识库', icon: markRaw(Link), to: '/manager/document?focus=web-import' },
   { label: 'AI 问答', description: '向智能助手提问', icon: markRaw(ChatDotRound), to: '/manager/assistant' },
@@ -222,6 +232,10 @@ onBeforeUnmount(() => {
 .home-welcome::before { width: 180px; height: 180px; right: -30px; top: -90px; }
 .home-welcome::after { width: 100px; height: 100px; right: 80px; bottom: -72px; }
 .home-welcome > div:first-child { position: relative; z-index: 1; }
+.experience-notice { display: flex; align-items: center; justify-content: space-between; gap: 15px; margin-top: 14px; padding: 13px 16px; color: #38546a; background: #fff9e9; border: 1px solid #f0d790; border-radius: 13px; }
+.experience-notice strong, .experience-notice span { display: block; }
+.experience-notice strong { color: #8b5d00; font-size: 14px; }
+.experience-notice span { margin-top: 4px; font-size: 12px; line-height: 1.5; }
 .welcome-eyebrow { margin: 0 0 8px !important; font-size: 11px !important; font-weight: 700; letter-spacing: 1.5px; opacity: .76; }
 .home-welcome h1 { margin: 0; font-size: clamp(24px, 3vw, 32px); line-height: 1.25; }
 .home-welcome p { margin: 10px 0 0; font-size: 15px; opacity: .86; }

@@ -11,6 +11,7 @@ class Account(Model):
     name = fields.CharField(max_length=255)
     avatar = fields.CharField(max_length=500, null=True)
     role = fields.CharField(max_length=20, db_index=True)
+    is_experience = fields.BooleanField(default=False, db_index=True)
     session_version = fields.IntField(default=1)
     created_at = fields.DatetimeField(auto_now_add=True)
 

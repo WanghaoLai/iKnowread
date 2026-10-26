@@ -21,6 +21,10 @@ def _endpoint(method: str, path: str) -> Endpoint:
 
 API_CONTRACT: Final[dict[str, Endpoint]] = {
     "meta.capabilities": _endpoint("GET", "/capabilities"),
+    "experience.me": _endpoint("GET", "/experience/me"),
+    "experience.admin_settings": _endpoint("GET", "/admin/experience"),
+    "experience.update_admin_settings": _endpoint("PUT", "/admin/experience"),
+    "experience.admin_documents": _endpoint("GET", "/admin/experience/documents"),
     "dashboard.summary": _endpoint("GET", "/dashboard"),
     "auth.captcha": _endpoint("GET", "/captcha"),
     "auth.me": _endpoint("GET", "/me"),

@@ -5,6 +5,7 @@ from app.common.result import Result
 from app.dependencies import CurrentAccount, get_current_account
 from app.schemas.highlight import HighlightCreate, HighlightUpdate
 from app.services import highlight_service
+from app.services import experience_service
 
 router = APIRouter(prefix=HIGHLIGHTS_PREFIX)
 
@@ -36,6 +37,7 @@ async def update_highlight(
     payload: HighlightUpdate,
     current: CurrentAccount = Depends(get_current_account),
 ):
+    experience_service.deny_experience_write(current, "编辑高亮")
     return Result.success(
         await highlight_service.update(current.id, highlight_id, payload)
     )
@@ -46,5 +48,6 @@ async def delete_highlight(
     highlight_id: int,
     current: CurrentAccount = Depends(get_current_account),
 ):
+    experience_service.deny_experience_write(current, "删除高亮")
     await highlight_service.delete(current.id, highlight_id)
     return Result.success()

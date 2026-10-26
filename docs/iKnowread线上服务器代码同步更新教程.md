@@ -2,9 +2,13 @@
 
 > **适用范围**：本地开发完成后，把已经测试并提交的源码同步到一台正在运行 iKnowread 的 Ubuntu Docker 服务器，并完成带备份、健康检查和自动回滚的线上更新。
 >
-> **不适用范围**：首次安装 Docker、首次部署、迁移到空服务器、数据库大版本升级，以及仍依赖 `compose.test.yaml` 将 Web 绑定到 `127.0.0.1:8443` 的备案期私有测试环境。首次部署和灾难恢复请使用项目的《iKnowread 通用 Docker 部署教程》。
+> **不适用范围**：首次安装 Docker、首次部署、迁移到空服务器、数据库大版本升级，以及仍依赖 `compose.test.yaml` 将 Web 绑定到 `127.0.0.1:8443` 的备案期私有测试环境。首次部署和灾难恢复请使用[《iKnowread 通用 Docker 部署教程》](./iKnowread通用Docker部署教程\(Ubuntu-Windows-macOS\).md)。
 >
 > **当前依据**：仓库根目录的 `compose.yaml`，以及 `deploy/release-check.sh`、`deploy/update.sh`、`deploy/backup.sh` 和 `deploy/verify-backup.sh`。脚本行为变化后，应先更新脚本，再同步修订本文。
+>
+> **已验证环境**：Ubuntu 24.04 LTS x86_64，4 核 CPU、4GB 内存、40GB SSD、1.9GB Swap、3Mbps 峰值带宽、300GB 月流量。更低配置需重新评估构建和 Crawler 并发资源。
+>
+> **最近验证日期**：2026-10-24。
 
 ## 1. 先理解更新链路
 
@@ -20,12 +24,13 @@
 ```text
 本地提交
   → 目标架构发布检查与镜像漏洞扫描
+  → 生成并记录唯一发布标签
   → rsync 预演
   → 本地源码同步到服务器中转目录
   → 中转目录精确同步到 /opt/iknowread
   → update.sh 创建运行镜像快照
-  → 创建并隔离恢复验证完整备份
   → 构建唯一版本标签
+  → 创建并隔离恢复验证完整备份
   → 切换容器并等待健康检查
   → 浏览器业务验收
 ```
@@ -38,6 +43,17 @@
 - 不覆盖服务器 `.env`，也不把本地开发数据同步到线上。
 - 不执行 `docker compose down -v`、`docker volume prune` 或其他可能删除正式卷的命令。
 - 每次发布使用唯一标签，使源码、镜像、备份和故障记录可以对应。
+
+### 1.1 四个状态必须分开判断
+
+| 状态 | 代表什么 | 不代表什么 |
+|---|---|---|
+| 源码已同步 | `/opt/iknowread` 中是新源码 | 容器已经使用新代码 |
+| 镜像已构建 | 本机存在指定标签镜像 | 正在运行的容器已切换 |
+| 容器健康 | Docker 健康检查通过 | 所有业务功能都已验收 |
+| 功能开关开启 | 后端容器已读取相应环境变量 | 仅仅在 `.env` 中修改了文字 |
+
+Compose 环境变量是在容器**创建**时注入的。修改 `.env` 后执行 `docker compose restart` 不会加载新值，必须用 `docker compose up -d` 重新创建受影响的容器。
 
 ## 2. 路径和占位符
 
@@ -58,6 +74,7 @@
 - 正式服务器是 Ubuntu，Docker 命令使用 `sudo`。
 - 服务器已经存在健康的 iKnowread 部署和根目录 `.env`。
 - 正式站点通过 `compose.yaml` 发布 80/443 端口。
+- 4GB 内存服务器保留约 2GB Swap，并使用 `COMPOSE_PARALLEL_LIMIT=1` 串行调度构建，降低构建时的瞬时内存压力。
 
 ## 3. 发布前停手条件
 
@@ -68,6 +85,7 @@
 - 当前线上 `db`、`backend` 或 `web` 没有运行。
 - 服务器磁盘空间不足以同时保存构建缓存、新镜像、回滚镜像和完整备份。
 - 服务器根目录 `.env` 缺失。
+- `.env` 中声称 `CRAWLER_ENABLED=true`，但 `crawler` 或 `crawler-gateway` 未运行，或 Web 与 Crawler Gateway 实际镜像 ID 不一致。
 - `rsync -n` 预演出现不认识的 `*deleting` 项。
 - 当前仍使用备案期 `compose.test.yaml` 私有端口覆盖。
 - 有其他更新或备份任务正在运行。
@@ -205,6 +223,39 @@ TARGET_PLATFORM=linux/arm64 bash deploy/release-check.sh --scan
 
 Apple 芯片 Mac 检查 `linux/amd64` 时会使用跨架构模拟，速度通常较慢。不能因为耗时而取消目标架构检查。
 
+### 6.1 正确解读 Docker Scout 输出
+
+扫描会分两类输出：
+
+1. **未修复的 Critical/High**：完整报告，不静默忽略，但上游尚无可用修复版本时不会单独阻断。
+2. **已有修复版本的 Critical/High**：发布门禁，发现任何一项都会使脚本失败。
+
+因此，中间出现“Detected 13 vulnerabilities”不等于脚本误判。判断依据是“已有修复版本”部分是否为零，以及脚本最后是否明确输出“发布前检查全部通过”。仍应保留未修复项的记录，在后续基础镜像或依赖更新时重新评估。
+
+本项目曾实际被门禁拦下 Brotli、pypdf 和 filelock 中已有修复版本的 Critical/High 漏洞。当前检查还会在运行镜像中核对这些依赖的安全版本，不应通过修改扫描命令、隐藏输出或删除包来规避门禁。
+
+### 6.2 Crawler 镜像校验的实际故障
+
+若第 5 步出现：
+
+```text
+Unable to find image 'iknowread-crawler:local' locally
+pull access denied for iknowread-crawler
+```
+
+说明本地缺少脚本预期的 Crawler 标签，Docker 随后误尝试从 Docker Hub 拉取一个并不存在的公开仓库。不要执行 `docker login` 或把这个内部镜像推送到公共仓库。
+
+当前版本的 `release-check.sh` 会依次构建 db、backend、web 和 crawler，并立即检查四个镜像标签。如果仍看到该错误，先确认本地已同步到最新的 `deploy/release-check.sh`，然后从第 6 节开始重新运行，不得跳过失败项。
+
+本地发布检查构建的镜像只用于验证，不会通过 `rsync` 传到服务器。服务器会根据同步后的源码重新构建带唯一发布标签的镜像。
+
+### 6.3 警告不等于通过，也不等于失败
+
+- Vite 的 `Some chunks are larger than 500 kB` 是前端性能优化提示；当前不会单独阻断发布，但应纳入后续拆包优化。
+- Caddy 在校验环境中可能输出自动 HTTPS 的 `info`/`warn`；只有命令成功并显示 `Valid configuration` 才算配置通过。
+- `npm audit` 必须成功结束；看到上一步前端构建成功，不能代替依赖审计结果。
+- 无论中间输出如何，只有脚本返回退出码 `0` 且最后显示“发布前检查全部通过”才能继续。
+
 ## 7. 更新前检查线上状态
 
 在服务器执行：
@@ -229,10 +280,39 @@ free -h
 可检查当前标签而不显示其他机密：
 
 ```bash
-sudo awk -F= '$1 == "APP_TAG" || $1 == "MYSQL_IMAGE_TAG" {print}' .env
+sudo awk -F= '$1 == "APP_TAG" || $1 == "MYSQL_IMAGE_TAG" || $1 == "CRAWLER_ENABLED" {print}' .env
 ```
 
-旧部署可能还没有这两个字段，更新脚本会把缺失值按 `local` 处理并在成功切换时原子写入。
+旧部署可能还没有 `APP_TAG` 或 `MYSQL_IMAGE_TAG`，更新脚本会把这两个缺失值按 `local` 处理并在成功切换时原子写入。
+
+`CRAWLER_ENABLED` 缺失与明确设为 `false` 的效果相同。即使旧的 Crawler 容器仍在运行，后端功能和更新脚本也会按“未启用”处理。这是容器运行状态与功能状态不一致，必须在发布前按第 15 节纠正。
+
+Crawler 开启时执行：
+
+```bash
+sudo docker compose --profile web-import ps
+
+WEB_IMAGE_ID="$(sudo docker inspect --format '{{.Image}}' iknowread-web-1)"
+GATEWAY_IMAGE_ID="$(sudo docker inspect --format '{{.Image}}' iknowread-crawler-gateway-1)"
+test "$WEB_IMAGE_ID" = "$GATEWAY_IMAGE_ID" \
+  && echo "Web 与 Crawler Gateway 镜像一致" \
+  || echo "镜像不一致：停止发布"
+```
+
+`update.sh` 会要求 Web 与 Crawler Gateway 的**实际镜像 ID**相同，不只是镜像名称看起来相似。这保证单一回滚标签能够准确还原两个容器。
+
+对 4GB 内存、40GB 磁盘主机，还要确认：
+
+```bash
+free -h
+sudo docker stats --no-stream
+df -h /
+sudo docker system df
+```
+
+- Swap 必须可用，不应已经接近用尽。
+- Crawler 开启时 `WEB_IMPORT_WORKERS` 保持默认值 `1`。
+- 磁盘要能同时容纳旧镜像、新镜像、构建缓存、回滚标签和完整备份。
 
 ## 8. 本地同步到服务器中转目录
 
@@ -365,7 +445,8 @@ sudo docker compose config --quiet
 ```bash
 cd /opt/iknowread
 RELEASE_TAG='把本地生成的发布标签粘贴到这里'
-sudo bash deploy/update.sh "$RELEASE_TAG"
+sudo env COMPOSE_PARALLEL_LIMIT=1 \
+  bash deploy/update.sh "$RELEASE_TAG"
 ```
 
 ### 10.2 包含 MySQL 镜像更新
@@ -375,12 +456,13 @@ sudo bash deploy/update.sh "$RELEASE_TAG"
 ```bash
 cd /opt/iknowread
 RELEASE_TAG='把本地生成的发布标签粘贴到这里'
-sudo bash deploy/update.sh --include-db "$RELEASE_TAG"
+sudo env COMPOSE_PARALLEL_LIMIT=1 \
+  bash deploy/update.sh --include-db "$RELEASE_TAG"
 ```
 
-**本轮 Docker 优化首次发布包含 `deploy/Dockerfile.mysql` 变更，应使用第二条命令。后续未再修改 MySQL 镜像时恢复普通更新。**
-
 不要重复使用旧标签。服务器通常不包含 `.git`，显式传入本地生成的标签可以避免自动标签退化为 `时间-source`。
+
+`COMPOSE_PARALLEL_LIMIT=1` 限制 Compose 同时调度的构建任务，适合当前 4GB 服务器。它不改变构建结果，只减少峰值资源竞争。
 
 ## 11. 更新脚本实际执行的工作
 
@@ -391,7 +473,7 @@ sudo bash deploy/update.sh --include-db "$RELEASE_TAG"
 3. 读取当前 `APP_TAG`、`MYSQL_IMAGE_TAG` 和 `CRAWLER_ENABLED`。
 4. 从正在运行的容器镜像创建唯一的 `rollback-*` 标签。
 5. 拒绝覆盖已存在的发布镜像标签。
-6. 校验 Compose 并构建新版本镜像。
+6. 校验 Compose，并为当前已启用的应用服务构建新版本镜像；普通更新不重建 MySQL。
 7. 调用 `deploy/backup.sh`，短暂停止后端写入。
 8. 导出数据库，打包整个应用数据、部署配置和源码。
 9. 校验 SHA256，并把 SQL 导入一次性 MySQL 容器做隔离恢复验证；数据库已执行的迁移必须是备份源码迁移序列的连续前缀，已有校验和必须匹配，允许新源码包含尚未执行的待发布迁移。
@@ -403,6 +485,36 @@ sudo bash deploy/update.sh --include-db "$RELEASE_TAG"
 普通更新不会重启 MySQL。`--include-db` 会把当前 MySQL 运行镜像一并建立回滚标签、构建和切换，但不会替换数据卷，也不会自动升级 MySQL 主版本。
 
 备份会短暂停止 backend，因此发布期间可能出现短时间接口不可用。应选择低使用量时段，并提前通知相关用户。
+
+成功执行必须到达 `[5/5] 核对运行容器`，并最终输出：
+
+```text
+更新完成：<旧标签> -> <新标签>
+已保留回滚镜像 rollback-... 和本次 COMPLETE 备份……
+```
+
+只看到镜像 `Built`、备份归档名称或部分容器 `Healthy`，都不能代表整个更新脚本已成功结束。
+
+### 11.1 备份输出怎样才算通过
+
+数据库结构与后端同时更新时，可能看到：
+
+```text
+backup-migration-check: PASS (applied=14, source=19, pending=5)
+backup-restore-check: PASS
+备份完成：backups/<UTC时间>（……）
+```
+
+这表示线上数据库已执行 14 个迁移，新源码共有 19 个，尚待新后端激活的 5 个迁移构成合法的连续后缀。这是正常发布状态，不是数据丢失。
+
+只有同时满足以下条件才是完整备份：
+
+- 四个 `.tar.gz`/`.sql.gz` 文件的 SHA256 校验全部通过；
+- `backup-migration-check: PASS`；
+- `backup-restore-check: PASS`；
+- 备份目录中存在 `COMPLETE` 标记。
+
+若输出“备份归档已生成，但隔离恢复验证失败；未标记为完整备份”，`update.sh` 会在激活新版之前停止。这时不要手工继续 `docker compose up`，也不要为该目录手工创建 `COMPLETE`。应保留全部输出，修复验证脚本或数据问题，再使用一个**新的发布标签**重新执行更新。
 
 ## 12. 更新后的自动与人工验收
 
@@ -424,7 +536,14 @@ df -h /
 ```bash
 sudo docker compose --profile web-import ps
 sudo docker compose --profile web-import logs --tail=100 crawler crawler-gateway
+sudo docker inspect iknowread-backend-1 \
+  --format '{{range .Config.Env}}{{println .}}{{end}}' \
+  | grep '^CRAWLER_ENABLED=true$'
 ```
+
+普通更新不切换 MySQL 镜像，因此 `ps` 中 db 仍显示旧标签或 `sha256:...` 并不自动代表失败。判断标准是 db 健康、`.env` 中 `MYSQL_IMAGE_TAG` 与预期一致，且本轮确实没有选择 `--include-db`。
+
+`app-data-init` 是一次性权限初始化服务，显示 `Exited (0)` 或 Compose 汇总中的 `Exited` 是预期结果，不应把它强行保持为运行状态。
 
 ### 12.2 HTTP 验收
 
@@ -433,6 +552,7 @@ sudo docker compose --profile web-import logs --tail=100 crawler crawler-gateway
 ```bash
 curl -fsS https://read.example.com/healthz
 curl -fsS https://read.example.com/api/ready
+curl -fsS https://read.example.com/api/capabilities
 ```
 
 检查：
@@ -441,7 +561,17 @@ curl -fsS https://read.example.com/api/ready
 - 浏览器证书受信任且域名匹配；
 - `/healthz` 可访问；
 - `/api/ready` 返回就绪状态；
+- `/api/capabilities` 返回的功能开关与 `.env` 和实际部署预期一致；
 - 3306、9090 和 5173 未向公网开放。
+
+Crawler 开启时，能力接口必须包含：
+
+```json
+"web_import_enabled": true,
+"web_import_error": null
+```
+
+OCR 首发未启用时，`"ocr_enabled": false` 与 `"ocr_error": "OCR 服务未启用"` 是预期状态，不是发布故障。
 
 ### 12.3 浏览器业务验收
 
@@ -483,16 +613,26 @@ sudo awk -F= '$1 == "APP_TAG" || $1 == "MYSQL_IMAGE_TAG" {print}' .env
 1. 备份当前 `.env` 到仅 root 可读的受控目录。
 2. 将 `.env` 的 `APP_TAG` 改为本次 `rollback-*` 标签。
 3. 如果本次使用了 `--include-db`，同时把 `MYSQL_IMAGE_TAG` 改为同一回滚标签。
-4. 执行：
+4. 根据 `.env` 中的 Crawler 开关，执行与当前拓扑一致的命令。
+
+Crawler 关闭时：
 
 ```bash
 sudo docker compose up -d --wait --wait-timeout 300 --no-build
 sudo docker compose ps
 ```
 
-5. 重新检查 `/api/ready` 和核心业务。
+Crawler 开启时：
 
-如果新版本已经执行了与旧程序不兼容的数据库迁移，不能只回滚镜像。应按通用部署教程使用本次发布前生成的完整备份恢复；恢复会丢失备份时间点之后的新写入，因此恢复前必须另存当前状态并明确业务影响。
+```bash
+sudo docker compose --profile web-import \
+  up -d --wait --wait-timeout 300 --no-build
+sudo docker compose --profile web-import ps
+```
+
+5. 重新检查 `/api/ready`、`/api/capabilities` 和核心业务。
+
+如果新版本已经执行了与旧程序不兼容的数据库迁移，不能只回滚镜像。应按[《iKnowread 通用 Docker 部署教程》](./iKnowread通用Docker部署教程\(Ubuntu-Windows-macOS\).md)使用本次发布前生成的完整备份恢复；恢复会丢失备份时间点之后的新写入，因此恢复前必须另存当前状态并明确业务影响。
 
 ## 14. 备案期私有测试环境
 
@@ -507,13 +647,194 @@ sudo docker compose ps
 
 `deploy/rsync-excludes.txt` 会继续保护 `compose.test.yaml` 和 `deploy/Caddyfile.test`，但“文件不会被覆盖”不等于“更新脚本已经正确应用这些文件”。
 
-## 15. Crawler 启停边界
+## 15. 网页收藏（Crawler）的首次启用、关闭与故障恢复
 
-当服务器 `.env` 已经设置 `CRAWLER_ENABLED=true`，更新脚本会自动使用 `web-import` profile，并构建和更新 crawler。它还要求更新前的 `crawler`、`crawler-gateway` 已经运行，以便建立可信回滚点。
+网页收藏由两层状态共同决定：
 
-因此不要在普通更新前直接把 `CRAWLER_ENABLED=false` 改成 `true`。首次启用 Crawler 属于部署拓扑变化，应按通用部署教程完成配置、隔离验证和首次启动；确认 crawler 与 gateway 健康后，后续更新才能使用本文标准流程。
+1. `.env` 中的 `CRAWLER_ENABLED`，决定后端是否开放功能和后续更新是否包含 Crawler。
+2. Compose `web-import` profile 中的 `crawler` 和 `crawler-gateway` 容器，提供实际爬取能力和固定上游网关。
 
-修改 Crawler 配置后需要重新创建后端容器，单纯 `restart` 不会重新加载 Compose 环境。
+`CRAWLER_ENABLED` 缺失时默认为 `false`。反过来，把它改成 `false` 也不会自动删除已运行的 profile 容器。所以启用和关闭都必须完成整套步骤，不能只改一行配置。
+
+### 15.1 首次启用前提
+
+首次启用是一次部署拓扑变化，不直接交给 `update.sh`，因为该脚本要求 Crawler 容器已经运行，才能为它们建立可信回滚点。
+
+先确认当前源码正是当前 `APP_TAG` 对应的已发布源码。如果 `/opt/iknowread` 已经又同步过未发布的新代码，先在 `CRAWLER_ENABLED=false` 状态下完成一次标准发布，再执行本节。
+
+检查状态：
+
+```bash
+cd /opt/iknowread
+sudo grep -E '^(APP_TAG|CRAWLER_ENABLED)=' .env
+sudo test -n "$(sudo sed -n 's/^CRAWL4AI_API_TOKEN=//p' .env)" \
+  && echo "Crawler Token：已配置" \
+  || echo "Crawler Token：缺失，停止启用"
+free -h
+sudo docker stats --no-stream
+```
+
+不要打印 `CRAWL4AI_API_TOKEN` 的实际内容，不要重新运行 `deploy/init-env.py`。当前 4GB 主机将 `WEB_IMPORT_WORKERS` 保持为 `1`。
+
+### 15.2 正确的首次启用顺序
+
+#### 第一步：先构建当前标签的 Crawler 镜像
+
+必须在修改开关之前完成这一步：
+
+```bash
+cd /opt/iknowread
+CURRENT_TAG="$(sudo sed -n 's/^APP_TAG=//p' .env)"
+test -n "$CURRENT_TAG" || { echo "APP_TAG 缺失"; exit 1; }
+
+sudo env COMPOSE_PARALLEL_LIMIT=1 \
+  docker compose --profile web-import build crawler
+
+sudo docker image inspect "iknowread-crawler:${CURRENT_TAG}" \
+  --format '{{.Id}}'
+```
+
+最后一条命令必须输出 `sha256:...`。这只新建当前版本缺失的 Crawler 镜像，不覆盖 backend、web 或数据库。
+
+#### 第二步：持久写入功能开关
+
+```bash
+sudo nano .env
+```
+
+将已有项改为，或在缺失时只添加一次：
+
+```dotenv
+CRAWLER_ENABLED=true
+```
+
+确认没有重复键：
+
+```bash
+sudo grep -n '^CRAWLER_ENABLED=' .env
+sudo docker compose --profile web-import config --quiet
+```
+
+#### 第三步：创建并等待全部服务健康
+
+```bash
+sudo docker compose --profile web-import \
+  up -d \
+  --no-build \
+  --wait \
+  --wait-timeout 300 \
+  backend crawler crawler-gateway web
+```
+
+这一步会重新创建 backend，使它真正读取 `CRAWLER_ENABLED=true`，同时使 Crawler Gateway 与 Web 使用同一个当前版本镜像。不会替换 MySQL 数据卷。
+
+#### 第四步：验证运行值和能力接口
+
+```bash
+sudo docker compose --profile web-import ps
+
+sudo docker inspect iknowread-backend-1 \
+  --format '{{range .Config.Env}}{{println .}}{{end}}' \
+  | grep '^CRAWLER_ENABLED=true$'
+
+WEB_IMAGE_ID="$(sudo docker inspect --format '{{.Image}}' iknowread-web-1)"
+GATEWAY_IMAGE_ID="$(sudo docker inspect --format '{{.Image}}' iknowread-crawler-gateway-1)"
+test "$WEB_IMAGE_ID" = "$GATEWAY_IMAGE_ID"
+
+DOMAIN_NAME="$(sudo sed -n 's/^DOMAIN=//p' .env)"
+curl -fsS "https://${DOMAIN_NAME}/api/capabilities"
+```
+
+必须同时满足：
+
+- backend、crawler、crawler-gateway、web 都为 `healthy`；
+- 后端实际环境变量是 `CRAWLER_ENABLED=true`；
+- 能力接口中 `"web_import_enabled": true`；
+- `"web_import_error": null`；
+- 浏览器中使用一个无需登录的公开文章 URL 完成一次真实收藏。
+
+首次启用通过后，以后的 `deploy/update.sh` 会自动启用 `web-import` profile，并把 crawler 纳入构建、健康检查和回滚保护。
+
+### 15.3 `pull access denied` / `No such image` 的恢复
+
+如果在开启开关后直接执行 `up --no-build`，而服务器没有当前 `APP_TAG` 的 Crawler 镜像，会出现：
+
+```text
+Image iknowread-crawler:<APP_TAG> error from registry: denied
+Error response from daemon: No such image: iknowread-crawler:<APP_TAG>
+```
+
+这不是 Docker Hub 登录问题。`iknowread-crawler` 是应在服务器本地根据项目 Dockerfile 构建的内部镜像；Compose 只是在本地缺失时尝试了注定失败的公网拉取。
+
+不需要恢复数据库，不要修改 `APP_TAG`，也不要执行 `docker login`。保留 `CRAWLER_ENABLED=true`，执行：
+
+```bash
+cd /opt/iknowread
+CURRENT_TAG="$(sudo sed -n 's/^APP_TAG=//p' .env)"
+sudo docker image inspect \
+  "iknowread-backend:${CURRENT_TAG}" \
+  "iknowread-web:${CURRENT_TAG}" >/dev/null
+
+sudo env COMPOSE_PARALLEL_LIMIT=1 \
+  docker compose --profile web-import build crawler
+
+sudo docker image inspect "iknowread-crawler:${CURRENT_TAG}" \
+  --format '{{.Id}}'
+
+sudo docker compose --profile web-import \
+  up -d --no-build --wait --wait-timeout 300 \
+  backend crawler crawler-gateway web
+```
+
+然后重复第 15.2 节第四步的验证。
+
+### 15.4 关闭网页收藏
+
+先编辑 `.env`：
+
+```bash
+cd /opt/iknowread
+sudo nano .env
+```
+
+改为：
+
+```dotenv
+CRAWLER_ENABLED=false
+```
+
+重新创建 backend 以加载新值：
+
+```bash
+sudo docker compose config --quiet
+sudo docker compose \
+  up -d --no-build --wait --wait-timeout 300 \
+  backend
+```
+
+再显式停止并删除可选 profile 容器：
+
+```bash
+sudo docker compose --profile web-import \
+  stop crawler-gateway crawler
+
+sudo docker compose --profile web-import \
+  rm -f crawler-gateway crawler
+```
+
+这不会删除 MySQL 数据、用户文档、已有网页收藏记录或镜像。验证：
+
+```bash
+sudo docker compose ps
+sudo docker inspect iknowread-backend-1 \
+  --format '{{range .Config.Env}}{{println .}}{{end}}' \
+  | grep '^CRAWLER_ENABLED=false$'
+
+DOMAIN_NAME="$(sudo sed -n 's/^DOMAIN=//p' .env)"
+curl -fsS "https://${DOMAIN_NAME}/api/capabilities"
+```
+
+能力接口应返回 `"web_import_enabled": false`，同时 db、backend 和 web 继续健康运行。
 
 ## 16. 常见失败及处理
 
@@ -525,9 +846,15 @@ sudo docker compose ps
 | 现有服务未运行 | 无法为实际运行版本创建可信回滚点 | 先恢复当前部署健康，再发布 |
 | 缺少 `iknowread-mysql:<标签>` | `.env` 标签与本机镜像不一致 | 停止发布，核对当前数据库容器镜像和 `.env`；不要随意重打标签 |
 | 备份没有 `COMPLETE` | 归档、校验、数据库恢复或 backend 恢复健康失败 | 查 `backup.sh` 输出和磁盘空间；备份通过前不会激活新版 |
+| `backup-migration-check` 显示 `pending=N` 后通过 | 新源码含有尚待发布的连续迁移 | 这是后端与数据库结构同时更新时的正常状态；仍必须等待 `backup-restore-check: PASS` 和 `COMPLETE` |
+| 隔离恢复验证失败 | 备份不可证明可恢复，或迁移序列/校验和异常 | 不手工激活，不伪造 `COMPLETE`；修复后用新发布标签重跑 `update.sh` |
 | 新容器健康检查失败 | 配置、迁移、运行时或依赖异常 | 脚本自动回滚；检查 backend/web/db 日志 |
+| `pull access denied for iknowread-crawler` | 当前 `APP_TAG` 的本地 Crawler 镜像缺失，Compose 转而尝试公网拉取 | 不登录 Docker Hub；按第 15.3 节构建精确标签后重跑 `up` |
+| `.env` 没有 `CRAWLER_ENABLED`，但 Crawler 容器在运行 | 旧容器残留，配置和实际拓扑不一致 | 缺失值按 `false` 处理；明确选择启用或关闭，并完整执行第 15 节 |
+| Web 与 Crawler Gateway 镜像不一致 | 手工启动、历史 `local` 镜像或不完整切换 | 先使两者在同一 `APP_TAG` 下重新 `up`，健康且镜像 ID 相同后再发布 |
 | `rsync` 预演删除未知文件 | 文件放错目录或排除规则不完整 | 暂停，确认文件归属并更新排除规则 |
 | 本地检查只显示“跳过 Scout” | 没有传 `--scan` | 使用 `bash deploy/release-check.sh --scan` 重跑 |
+| Scout 报告未修复严重漏洞但脚本通过 | 脚本展示无上游修复版本的项，门禁只阻断已有修复版本的严重项 | 保留风险记录，确认“已有修复版本”为零且最终显示全部通过 |
 | Apple 芯片构建 amd64 很慢 | 跨架构模拟开销 | 等待完成或在可信的 amd64 CI 执行相同门禁 |
 | 磁盘快速增长 | 新镜像、回滚镜像、构建缓存和备份并存 | 稳定观察后，先做异地备份，再按保留策略清理明确不再需要的对象 |
 
@@ -563,12 +890,14 @@ sudo docker builder prune
 - [ ] 发布检查最后显示“发布前检查全部通过”。
 - [ ] 已生成并保存唯一 `<发布标签>`。
 - [ ] 线上现有容器健康，磁盘和内存余量满足构建与备份需要。
+- [ ] `CRAWLER_ENABLED` 与实际容器拓扑一致；启用时 Crawler 与 Gateway 健康，Web/Gateway 镜像 ID 一致。
 - [ ] 本地到中转目录的 `rsync -n` 预演已审查。
 - [ ] 中转目录到 `/opt/iknowread` 的 `rsync -n` 预演已审查。
 - [ ] `.env`、数据、备份和服务器本地覆盖文件均受到排除规则保护。
 - [ ] `docker compose config --quiet` 通过。
 - [ ] 已根据 MySQL 镜像是否变化选择普通更新或 `--include-db`。
 - [ ] `deploy/update.sh` 成功，输出新标签、回滚标签和完整备份。
+- [ ] 备份输出同时包含 `backup-migration-check: PASS`、`backup-restore-check: PASS`，且目录含 `COMPLETE`。
 - [ ] 容器、HTTPS、`/api/ready`、日志和资源正常。
 - [ ] 登录、文档上传/阅读、笔记、高亮、进度、资料和相关可选功能已验收。
 - [ ] 最新完整备份已计划或已经转存到服务器之外。
@@ -614,12 +943,15 @@ sudo rsync -avc --no-owner --no-group --delete-delay \
 cd /opt/iknowread
 sudo docker compose config --quiet
 RELEASE_TAG='把本地生成的发布标签粘贴到这里'
-sudo bash deploy/update.sh "$RELEASE_TAG"
-# 本轮首次发布包含 MySQL 镜像优化时改用：
-# sudo bash deploy/update.sh --include-db "$RELEASE_TAG"
+sudo env COMPOSE_PARALLEL_LIMIT=1 \
+  bash deploy/update.sh "$RELEASE_TAG"
+# 仅当 MySQL 镜像定义确实变更且已安排维护窗口时改用：
+# sudo env COMPOSE_PARALLEL_LIMIT=1 \
+#   bash deploy/update.sh --include-db "$RELEASE_TAG"
 
-sudo docker compose ps
+sudo docker compose --profile web-import ps
 curl -fsS https://read.example.com/api/ready
+curl -fsS https://read.example.com/api/capabilities
 ```
 
 执行速查命令前仍须完成正文中的状态检查、预演审查、命令选择和业务验收。速查表不能代替发布判断。

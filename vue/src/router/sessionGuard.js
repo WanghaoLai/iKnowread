@@ -13,5 +13,15 @@ export async function fetchVerifiedSession(
   if (!response.ok) throw new Error('unauthorized')
   const result = await response.json()
   if (result.code !== '200' || !result.data?.id) throw new Error('unauthorized')
-  return result.data
+  if (!result.data.is_experience) return result.data
+  const policyResponse = await fetchImpl(`${baseUrl}${apiPath('experience.me')}`, {
+    credentials: 'include',
+    signal: AbortSignal.timeout(timeoutMs),
+  })
+  if (!policyResponse.ok) throw new Error('experience policy unavailable')
+  const policyResult = await policyResponse.json()
+  if (policyResult.code !== '200' || !policyResult.data?.enabled) {
+    throw new Error('experience account disabled')
+  }
+  return { ...result.data, experience_policy: policyResult.data }
 }

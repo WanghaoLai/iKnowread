@@ -30,8 +30,8 @@
           </button>
           <template #dropdown>
             <el-dropdown-menu>
-              <el-dropdown-item command="person" :icon="User">个人资料</el-dropdown-item>
-              <el-dropdown-item command="password" :icon="Lock">修改密码</el-dropdown-item>
+              <el-dropdown-item v-if="!data.user.is_experience" command="person" :icon="User">个人资料</el-dropdown-item>
+              <el-dropdown-item v-if="!data.user.is_experience" command="password" :icon="Lock">修改密码</el-dropdown-item>
               <el-dropdown-item command="logout" :icon="SwitchButton" divided>退出系统</el-dropdown-item>
             </el-dropdown-menu>
           </template>
@@ -57,7 +57,7 @@
             <el-icon><Document /></el-icon>
             <span>我的文档</span>
           </el-menu-item>
-          <el-menu-item index="/manager/recycle">
+          <el-menu-item v-if="!data.user.is_experience" index="/manager/recycle">
             <el-icon><Delete /></el-icon>
             <span>我的回收站</span>
           </el-menu-item>
@@ -65,21 +65,25 @@
             <el-icon><Reading /></el-icon>
             <span>在线阅读</span>
           </el-menu-item>
-          <el-menu-item index="/manager/notes">
+          <el-menu-item v-if="!data.user.is_experience || data.user.experience_policy?.show_notes" index="/manager/notes">
             <el-icon><Notebook /></el-icon>
             <span>我的笔记</span>
           </el-menu-item>
-          <el-menu-item index="/manager/assistant">
+          <el-menu-item v-if="!data.user.is_experience" index="/manager/assistant">
             <el-icon><ChatDotRound /></el-icon>
             <span>智能助手</span>
           </el-menu-item>
-          <el-menu-item index="/manager/api-config">
+          <el-menu-item v-if="!data.user.is_experience" index="/manager/api-config">
             <el-icon><Setting /></el-icon>
             <span>API配置</span>
           </el-menu-item>
           <el-menu-item v-if="data.user.role === 'admin'" index="/manager/announcements">
             <el-icon><Bell /></el-icon>
             <span>公告管理</span>
+          </el-menu-item>
+          <el-menu-item v-if="data.user.role === 'admin'" index="/manager/experience">
+            <el-icon><Present /></el-icon>
+            <span>体验账号管理</span>
           </el-menu-item>
           <el-sub-menu index="user" v-if="data.user.role === 'admin'">
             <template #title>
@@ -117,7 +121,7 @@ import { fileUrl, DEFAULT_AVATAR } from "@/utils/file";
 import { logoutAccount } from '@/api/auth'
 import router from "@/router";
 import {ElMessage} from "element-plus";
-import { ArrowDown, Avatar, Bell, ChatDotRound, Delete, Document, Expand, Fold, HomeFilled, Lock, Notebook, Reading, Setting, SwitchButton, User } from '@element-plus/icons-vue'
+import { ArrowDown, Avatar, Bell, ChatDotRound, Delete, Document, Expand, Fold, HomeFilled, Lock, Notebook, Present, Reading, Setting, SwitchButton, User } from '@element-plus/icons-vue'
 import { clearSession, getSession } from '@/utils/session'
 
 const data = reactive({

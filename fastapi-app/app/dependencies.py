@@ -2,7 +2,7 @@ from dataclasses import dataclass
 
 from fastapi import Depends, HTTPException, Request, status
 
-from app.models import Account
+from app.models import Account, ExperiencePolicy
 from app.security import decode_session_token, SESSION_COOKIE, session_matches_account
 
 
@@ -15,6 +15,10 @@ class CurrentAccount:
     @property
     def is_admin(self) -> bool:
         return self.role == "admin"
+
+    @property
+    def is_experience(self) -> bool:
+        return bool(self.account.is_experience)
 
 
 def _unauthorized(message: str = "请先登录") -> HTTPException:
@@ -48,6 +52,10 @@ async def get_current_account(request: Request) -> CurrentAccount:
         )
     ):
         raise _unauthorized("登录状态已失效，请重新登录")
+    if account.is_experience and not await ExperiencePolicy.filter(
+        account_id=account.id, enabled=True
+    ).exists():
+        raise _unauthorized("在线体验当前未开放")
     return CurrentAccount(id=account.id, role=role, account=account)
 
 
