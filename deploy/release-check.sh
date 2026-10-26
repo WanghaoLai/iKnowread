@@ -108,8 +108,12 @@ docker run --rm \
 docker run --rm --entrypoint /bin/sh "iknowread-mysql:${MYSQL_IMAGE_TAG}" \
     -c 'test ! -e /usr/bin/mysqlsh && mysqld --version && mysql --version && mysqldump --version'
 docker run --rm --entrypoint /usr/local/bin/gosu "iknowread-mysql:${MYSQL_IMAGE_TAG}" --version
+docker run --rm --entrypoint /bin/sh "iknowread-backend:${APP_TAG}" \
+    -ec 'minimum="3.0.22-1~deb12u2"; for package in openssl libssl3; do version="$(dpkg-query -W "$package" | cut -f2)"; echo "$package $version"; dpkg --compare-versions "$version" ge "$minimum"; done'
 docker run --rm --entrypoint python "iknowread-crawler:${APP_TAG}" \
     -c 'import importlib.metadata as metadata; expected = {"Crawl4AI": "0.9.4", "Brotli": "1.2.1", "pypdf": "6.21.2", "filelock": "4.2.1"}; assert all(metadata.version(package) == version for package, version in expected.items()), {package: metadata.version(package) for package in expected}'
+docker run --rm --entrypoint /bin/sh "iknowread-crawler:${APP_TAG}" \
+    -ec 'minimum="3.0.22-1~deb12u2"; for package in openssl libssl3; do version="$(dpkg-query -W "$package" | cut -f2)"; echo "$package $version"; dpkg --compare-versions "$version" ge "$minimum"; done'
 docker run --rm --read-only \
     --tmpfs /tmp:size=256m,mode=1777 \
     -e PYTHONPATH=/app -e OCR_ENABLED=true -e OCR_LANGUAGES=chi_sim+eng \

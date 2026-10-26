@@ -8,7 +8,7 @@
 >
 > **已验证环境**：Ubuntu 24.04 LTS x86_64，4 核 CPU、4GB 内存、40GB SSD、1.9GB Swap、3Mbps 峰值带宽、300GB 月流量。更低配置需重新评估构建和 Crawler 并发资源。
 >
-> **最近验证日期**：2026-10-24。
+> **最近验证日期**：2026-10-26。
 
 ## 1. 先理解更新链路
 
@@ -233,6 +233,8 @@ Apple 芯片 Mac 检查 `linux/amd64` 时会使用跨架构模拟，速度通常
 因此，中间出现“Detected 13 vulnerabilities”不等于脚本误判。判断依据是“已有修复版本”部分是否为零，以及脚本最后是否明确输出“发布前检查全部通过”。仍应保留未修复项的记录，在后续基础镜像或依赖更新时重新评估。
 
 本项目曾实际被门禁拦下 Brotli、pypdf 和 filelock 中已有修复版本的 Critical/High 漏洞。当前检查还会在运行镜像中核对这些依赖的安全版本，不应通过修改扫描命令、隐藏输出或删除包来规避门禁。
+
+Debian 安全仓库发布修复后，Dockerfile 中已存在的 `apt-get upgrade` 仍可能被 BuildKit 作为旧层复用。backend 和 crawler 因此使用受审核的 `DEBIAN_SECURITY_REFRESH` 纪元使安全更新层在所有构建主机上失效；发布检查同时校验 OpenSSL 最低安全版本。若再出现“仓库已有修复，镜像仍是旧版”，应由代码维护者审核修复版本并提升该纪元，不应只在一台机器上临时 `--no-cache` 后就发布。
 
 ### 6.2 Crawler 镜像校验的实际故障
 
@@ -855,6 +857,7 @@ curl -fsS "https://${DOMAIN_NAME}/api/capabilities"
 | `rsync` 预演删除未知文件 | 文件放错目录或排除规则不完整 | 暂停，确认文件归属并更新排除规则 |
 | 本地检查只显示“跳过 Scout” | 没有传 `--scan` | 使用 `bash deploy/release-check.sh --scan` 重跑 |
 | Scout 报告未修复严重漏洞但脚本通过 | 脚本展示无上游修复版本的项，门禁只阻断已有修复版本的严重项 | 保留风险记录，确认“已有修复版本”为零且最终显示全部通过 |
+| Scout 报告 Debian 包已有修复版本，但 Dockerfile 已有 `apt-get upgrade` | BuildKit 复用了安全仓库更新前的 apt 层 | 核对 Debian 仓库的实际候选版本，审核并提升 Dockerfile 的 `DEBIAN_SECURITY_REFRESH`，重跑完整门禁 |
 | Apple 芯片构建 amd64 很慢 | 跨架构模拟开销 | 等待完成或在可信的 amd64 CI 执行相同门禁 |
 | 磁盘快速增长 | 新镜像、回滚镜像、构建缓存和备份并存 | 稳定观察后，先做异地备份，再按保留策略清理明确不再需要的对象 |
 
