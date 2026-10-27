@@ -41,9 +41,14 @@ ENV PATH=/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin \
 COPY --from=upstream /tmp/crawler-site-packages.tar /tmp/crawler-site-packages.tar
 COPY --from=upstream /usr/local/bin/ /usr/local/bin/
 
+# Keep the production OS refresh cache key explicit. Bump the reviewed epoch
+# when a new Debian security package must be pulled on every build host.
+ARG DEBIAN_SECURITY_REFRESH=2026-10-26
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
-    sed -i 's|http://deb.debian.org|https://deb.debian.org|g; s|http://security.debian.org|https://security.debian.org|g' \
+    echo "Debian security refresh: ${DEBIAN_SECURITY_REFRESH}" \
+    && rm -f /etc/apt/apt.conf.d/docker-clean \
+    && sed -i 's|http://deb.debian.org|https://deb.debian.org|g; s|http://security.debian.org|https://security.debian.org|g' \
         /etc/apt/sources.list.d/debian.sources \
     && for attempt in 1 2 3 4 5; do \
         apt-get -o APT::Update::Error-Mode=any \

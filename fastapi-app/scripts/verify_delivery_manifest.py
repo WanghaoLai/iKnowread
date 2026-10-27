@@ -16,6 +16,11 @@ REQUIRED = (
     "fastapi-app/app/migrations/v017_web_import_lifecycle.py",
     "fastapi-app/app/migrations/v018_dashboard_reading_progress.py",
     "fastapi-app/app/migrations/v019_announcements.py",
+    "fastapi-app/app/migrations/v020_experience_account.py",
+    "fastapi-app/app/models/experience.py",
+    "fastapi-app/app/routers/experience.py",
+    "fastapi-app/app/schemas/experience.py",
+    "fastapi-app/app/services/experience_service.py",
     "fastapi-app/app/models/web_import_job.py",
     "fastapi-app/app/routers/web_imports.py",
     "fastapi-app/app/schemas/web_import.py",
@@ -33,11 +38,13 @@ REQUIRED = (
     "vue/src/api/apiPaths.js",
     "vue/src/api/auth.js",
     "vue/src/api/highlights.js",
+    "vue/src/api/experience.js",
     "vue/src/api/notes.js",
     "vue/src/api/webImports.js",
     "vue/src/composables/useDocumentLoader.js",
     "vue/src/composables/useSelectionExplanation.js",
     "vue/src/utils/markdown.js",
+    "vue/src/views/manager/ExperienceManage.vue",
 )
 
 

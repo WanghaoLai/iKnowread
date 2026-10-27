@@ -61,7 +61,7 @@
             :title="ocrError"
         >{{ ocrDisabled ? 'OCR 未启用' : 'OCR 未完成' }}</el-tag>
         <el-button
-            v-if="model.sourceFormat === 'pdf' && ocrStatus === 'failed' && !ocrDisabled"
+            v-if="!readOnly && model.sourceFormat === 'pdf' && ocrStatus === 'failed' && !ocrDisabled"
             size="small"
             :loading="ocrRetrying"
             @click="retryOcr"
@@ -89,6 +89,7 @@
         v-if="highlightManager.open"
         :highlights="highlights"
         :loading="highlightManager.loading"
+        :read-only="readOnly"
         @close="highlightManager.open = false"
         @locate="locateManagedHighlight"
         @edit="editManagedHighlight"
@@ -150,6 +151,7 @@
         ref="explainRef"
         :explain="explain"
         :selection-highlight="selectionHighlight"
+        :read-only="readOnly"
         @close="closeExplanation(true)"
         @configure="goToConfig"
         @retry="requestExplanation"
@@ -169,6 +171,7 @@
     <DocumentHighlightDetail
         ref="highlightDetailRef"
         :detail="highlightDetail"
+        :read-only="readOnly"
         @close="closeHighlightDetail"
         @edit="beginHighlightEdit"
         @cancel-edit="highlightDetail.editing = false"
@@ -200,6 +203,7 @@ import { deleteHighlight, listHighlights, updateHighlight } from '@/api/highligh
 import { notifyRequestError } from '@/utils/request'
 import { getDocumentOcrStatus, retryDocumentOcr } from '@/api/documents'
 import { getReadingProgress, saveReadingProgress as saveRemoteReadingProgress } from '@/api/readingProgress'
+import { getSession } from '@/utils/session'
 import {
   isSourceAnchor,
   loadReadingProgressSavedAt,
@@ -212,6 +216,7 @@ const props = defineProps({
   initialAnchor: { type: Object, default: null },
 })
 const router = useRouter()
+const readOnly = computed(() => Boolean(getSession().is_experience || props.model.readOnly))
 const loading = ref(false)
 const loadingText = ref('加载中...')
 const error = ref('')
@@ -540,6 +545,7 @@ const {
   clearCache: clearExplanationCache,
   stop: stopExplanation,
 } = useSelectionExplanation({
+  canWrite: () => !readOnly.value,
   getDocumentId: () => props.model.id,
   getContentVersion: () => contentVersion.value,
   getSourceModel: currentSourceModel,
@@ -587,12 +593,14 @@ const openHighlightDetail = (item, rect = null, { edit = false } = {}) => {
 }
 
 const beginHighlightEdit = () => {
+  if (readOnly.value) return
   if (!highlightDetail.item) return
   beginHighlightEditState()
   positionHighlightDetail()
 }
 
 const saveHighlightRemark = async () => {
+  if (readOnly.value) return
   const item = highlightDetail.item
   if (!item || highlightDetail.saving) return
   highlightDetail.saving = true
@@ -633,6 +641,7 @@ const locateDetailHighlight = async () => {
 }
 
 const removeHighlight = async item => {
+  if (readOnly.value) return
   if (!item) return
   // 悬浮窗层级（4000+）必须盖过外层 el-dialog（约 2000），而 ElMessageBox 的
   // 层级低于悬浮窗；先关闭悬浮窗再确认，避免确认框被悬浮窗遮挡。

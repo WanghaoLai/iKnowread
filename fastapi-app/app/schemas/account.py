@@ -29,6 +29,7 @@ class AccountPublic(BaseModel):
     name: str
     avatar: str | None = None
     role: Literal["admin", "user"]
+    is_experience: bool = False
 
 
 class LoginRequest(StrictModel):

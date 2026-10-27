@@ -20,6 +20,7 @@ from app.dependencies import CurrentAccount, get_current_account, require_docume
 from app.services import document_service
 from app.services import ocr_service
 from app.services import processing_task_service
+from app.services import experience_service
 from app.storage import get_storage, run_storage_io
 
 router = APIRouter(prefix=DOCUMENTS_PREFIX)
@@ -37,6 +38,7 @@ async def upload(
     file: UploadFile = File(...),
     current: CurrentAccount = Depends(get_current_account),
 ):
+    experience_service.deny_experience_write(current, "上传文档")
     doc = await document_service.upload(current.id, current.role, file)
     if doc["ext"] == "pdf":
         await ocr_service.enqueue(doc["id"])
@@ -51,7 +53,7 @@ async def select_page(
     page_size: int = Query(10, alias="pageSize", ge=1, le=100),
     current: CurrentAccount = Depends(get_current_account),
 ):
-    page = await document_service.select_page(current.id, name, page_num, page_size)
+    page = await document_service.select_page(current, name, page_num, page_size)
     return Result.success(PageInfo(**page))
 
 
@@ -63,6 +65,7 @@ async def recycle_select_page(
     page_size: int = Query(10, alias="pageSize", ge=1, le=100),
     current: CurrentAccount = Depends(get_current_account),
 ):
+    experience_service.deny_experience_write(current, "使用回收站")
     page = await document_service.recycle_page(current.id, name, page_num, page_size)
     return Result.success(PageInfo(**page))
 
@@ -70,6 +73,7 @@ async def recycle_select_page(
 # 从回收站恢复文档（高亮、笔记关联、阅读进度一并复原）
 @router.post(DOCUMENT_RESTORE_ROUTE)
 async def restore(doc_id: int, current: CurrentAccount = Depends(get_current_account)):
+    experience_service.deny_experience_write(current, "恢复文档")
     doc = await document_service.get_by_id(doc_id, include_deleted=True)
     require_document_owner(current, doc)
     restored = await document_service.restore(doc_id)
@@ -81,6 +85,7 @@ async def restore(doc_id: int, current: CurrentAccount = Depends(get_current_acc
 # 彻底删除回收站中的文档及其文件
 @router.delete(DOCUMENT_PURGE_ROUTE)
 async def purge(doc_id: int, current: CurrentAccount = Depends(get_current_account)):
+    experience_service.deny_experience_write(current, "彻底删除文档")
     doc = await document_service.get_by_id(doc_id, include_deleted=True)
     require_document_owner(current, doc)
     await document_service.delete(doc_id)
@@ -95,7 +100,7 @@ async def download(
     current: CurrentAccount = Depends(get_current_account),
 ):
     doc = await document_service.get_by_id(doc_id)
-    require_document_owner(current, doc)
+    await experience_service.require_document_read(current, doc)
     _require_content_version(doc, version)
     storage = get_storage()
     return await run_storage_io(
@@ -112,7 +117,7 @@ async def preview(
     current: CurrentAccount = Depends(get_current_account),
 ):
     doc = await document_service.get_by_id(doc_id)
-    require_document_owner(current, doc)
+    await experience_service.require_document_read(current, doc)
     _require_content_version(doc, version)
     if doc.ext != "pdf":
         from fastapi import HTTPException
@@ -127,7 +132,7 @@ async def preview(
 @router.get(DOCUMENT_OCR_STATUS_ROUTE)
 async def ocr_status(doc_id: int, current: CurrentAccount = Depends(get_current_account)):
     doc = await document_service.get_by_id(doc_id)
-    require_document_owner(current, doc)
+    await experience_service.require_document_read(current, doc)
     return Result.success(document_service.serialize(doc))
 
 
@@ -136,7 +141,7 @@ async def processing_status(
     doc_id: int, current: CurrentAccount = Depends(get_current_account)
 ):
     doc = await document_service.get_by_id(doc_id)
-    require_document_owner(current, doc)
+    await experience_service.require_document_read(current, doc)
     return Result.success({
         "document_id": doc.id,
         "document_version": doc.content_version,
@@ -146,6 +151,7 @@ async def processing_status(
 
 @router.post(DOCUMENT_OCR_ROUTE)
 async def retry_ocr(doc_id: int, current: CurrentAccount = Depends(get_current_account)):
+    experience_service.deny_experience_write(current, "重新执行 OCR")
     doc = await document_service.get_by_id(doc_id)
     require_document_owner(current, doc)
     await ocr_service.retry(doc)
@@ -156,6 +162,7 @@ async def retry_ocr(doc_id: int, current: CurrentAccount = Depends(get_current_a
 # 删除文档：移入回收站，可在回收站中恢复或彻底删除。
 @router.delete(DOCUMENT_ITEM_ROUTE)
 async def delete(doc_id: int, current: CurrentAccount = Depends(get_current_account)):
+    experience_service.deny_experience_write(current, "删除文档")
     doc = await document_service.get_by_id(doc_id)
     require_document_owner(current, doc)
     await document_service.soft_delete(doc_id)

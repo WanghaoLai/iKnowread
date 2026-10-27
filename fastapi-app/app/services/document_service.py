@@ -129,15 +129,28 @@ async def upload(account_id: int, role: str, file: UploadFile) -> dict:
     return serialize(doc)
 
 
-async def select_page(account_id: int, name: str = "", page_num: int = 1, page_size: int = 10) -> dict:
-    query = Document.filter(
-        account_id=account_id, deleted_at__isnull=True, name__contains=name
-    ).order_by("-created_at", "-id")
+async def select_page(current, name: str = "", page_num: int = 1, page_size: int = 10) -> dict:
+    if isinstance(current, int):
+        query = Document.filter(
+            account_id=current, deleted_at__isnull=True, name__contains=name
+        )
+        read_only = False
+    elif current.is_experience:
+        from app.services import experience_service
+        query = await experience_service.shared_documents_query(current, name)
+        read_only = True
+    else:
+        query = Document.filter(
+            account_id=current.id, deleted_at__isnull=True, name__contains=name
+        )
+        read_only = False
+    query = query.order_by("-created_at", "-id")
     docs = await query.offset((page_num - 1) * page_size).limit(page_size)
     stages = await processing_task_service.stages_for_documents(docs)
     items = []
     for doc in docs:
         item = serialize(doc)
+        item["read_only"] = read_only
         item["processing_stages"] = stages[doc.id]
         items.append(item)
     return {"total": await query.count(), "list": items}

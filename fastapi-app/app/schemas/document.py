@@ -30,4 +30,5 @@ class DocumentPublic(BaseModel):
     source_fetched_at: datetime | None
     account_id: int
     created_at: datetime
+    read_only: bool = False
     processing_stages: list[DocumentProcessingStagePublic] = Field(default_factory=list)

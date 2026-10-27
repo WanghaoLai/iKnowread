@@ -4,9 +4,13 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     HOME=/tmp
 WORKDIR /app
+# Bump this reviewed epoch when Debian publishes a security fix that must
+# invalidate BuildKit's cached apt upgrade layer on developer and server hosts.
+ARG DEBIAN_SECURITY_REFRESH=2026-10-26
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
     set -eux; \
+    echo "Debian security refresh: ${DEBIAN_SECURITY_REFRESH}"; \
     rm -f /etc/apt/apt.conf.d/docker-clean; \
     sed -i 's|http://deb.debian.org|https://deb.debian.org|g' /etc/apt/sources.list.d/debian.sources; \
     for attempt in 1 2 3 4 5; do \

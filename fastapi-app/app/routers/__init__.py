@@ -7,7 +7,7 @@ from app.common.result import Result
 from app.config import settings
 from app.database import verify_instance_lock
 from app.routers import (
-    account, ai, announcements, auth, dashboard, document, files, highlights, notes,
+    account, ai, announcements, auth, dashboard, document, experience, files, highlights, notes,
     reading_progress, web_imports,
 )
 from app.services import ocr_service
@@ -16,7 +16,7 @@ from app.storage import run_storage_io
 
 api_router = APIRouter()
 for router in (
-    auth.router, account.router, document.router, files.router, ai.router,
+    auth.router, account.router, experience.router, document.router, files.router, ai.router,
     notes.router, highlights.router,
     web_imports.router,
     dashboard.router, reading_progress.router,
@@ -57,6 +57,8 @@ async def ready():
 
 @api_router.get("/capabilities")
 async def capabilities():
+    from app.services import experience_service
+
     ocr_error = ocr_service.availability_error()
     crawler_error = await crawler_client.runtime_availability_error()
     return Result.success({
@@ -65,4 +67,5 @@ async def capabilities():
         "ocr_error": ocr_error,
         "web_import_enabled": crawler_error is None,
         "web_import_error": crawler_error,
+        "experience_account": await experience_service.public_capability(),
     })

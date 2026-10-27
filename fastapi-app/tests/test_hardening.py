@@ -32,7 +32,11 @@ from app.migrations.v001_unify_accounts import (
     _move_account_directories,
     _prepare_legacy_password,
 )
-from app.migrations.runner import migration_checksum
+from app.migrations.runner import (
+    LEGACY_MIGRATION_CHECKSUMS,
+    migration_checksum,
+    migration_checksum_is_compatible,
+)
 from app.migrations import (
     v015_markdown_documents,
     v016_web_imports,
@@ -216,16 +220,44 @@ class ConfigurationTests(unittest.TestCase):
             source.write_text("VERSION = 1\nNAME = 'changed'\n", encoding="utf-8")
             self.assertNotEqual(first, migration_checksum(migration))
 
+    def test_v020_accepts_only_reviewed_legacy_checksum(self):
+        current = "ed79bd800aea49f82257747c6a4eb7c418df916fc5ae6d7def0088658ba72603"
+        legacy = {
+            "20b9ce4606e0cd3533aa780c42c67918b45d8f4119d53798214f04de244c4602",
+            "9739dc7522c72ca2b74635aaa17ea61be9cad1e459c1cf332d640100f4b4059c",
+        }
+
+        self.assertEqual(LEGACY_MIGRATION_CHECKSUMS[20], frozenset(legacy))
+        self.assertTrue(migration_checksum_is_compatible(20, current, current))
+        for checksum in legacy:
+            self.assertTrue(migration_checksum_is_compatible(20, checksum, current))
+        self.assertFalse(migration_checksum_is_compatible(20, "0" * 64, current))
+        self.assertFalse(migration_checksum_is_compatible(19, next(iter(legacy)), current))
+
+    def test_v020_avoids_deprecated_mysql_values_function(self):
+        from app.migrations import v020_experience_account
+
+        source = Path(v020_experience_account.__file__).read_text(encoding="utf-8")
+        self.assertNotRegex(source, r"VALUES\s*\(")
+        self.assertIn("NOT EXISTS", source)
+
     def test_latest_migration_is_registered(self):
         from app.migrations.runner import MIGRATIONS
 
-        from app.migrations import v018_dashboard_reading_progress, v019_announcements
+        from app.migrations import (
+            v018_dashboard_reading_progress,
+            v019_announcements,
+            v020_experience_account,
+            v021_bootstrap_experience_account,
+        )
 
-        self.assertIs(MIGRATIONS[-1], v019_announcements)
+        self.assertIs(MIGRATIONS[-1], v021_bootstrap_experience_account)
         self.assertEqual(v016_web_imports.VERSION, 16)
         self.assertEqual(v017_web_import_lifecycle.VERSION, 17)
         self.assertEqual(v018_dashboard_reading_progress.VERSION, 18)
         self.assertEqual(v019_announcements.VERSION, 19)
+        self.assertEqual(v020_experience_account.VERSION, 20)
+        self.assertEqual(v021_bootstrap_experience_account.VERSION, 21)
 
 
 class _MarkdownMigrationConnection:

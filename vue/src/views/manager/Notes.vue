@@ -3,11 +3,11 @@
     <header class="notes-heading">
       <div>
         <h1>我的笔记</h1>
-        <p>收纳阅读时的重要解释和思考，随时整理、检索与导出。</p>
+        <p>{{ isExperience ? '只读查看管理员在共享文档中开放的笔记。' : '收纳阅读时的重要解释和思考，随时整理、检索与导出。' }}</p>
       </div>
       <div class="heading-actions">
         <div class="note-total"><strong>{{ summary.total }}</strong><span>条笔记</span></div>
-        <el-dropdown :disabled="exporting || !summary.total" @command="handleExportCommand">
+        <el-dropdown v-if="!isExperience" :disabled="exporting || !summary.total" @command="handleExportCommand">
           <el-button :icon="Download" :loading="exporting" :disabled="!summary.total">
             导出笔记<el-icon class="export-arrow"><ArrowDown /></el-icon>
           </el-button>
@@ -19,7 +19,7 @@
             </el-dropdown-menu>
           </template>
         </el-dropdown>
-        <el-button type="primary" :icon="Plus" @click="openCreate">新建笔记</el-button>
+        <el-button v-if="!isExperience" type="primary" :icon="Plus" @click="openCreate">新建笔记</el-button>
       </div>
     </header>
 
@@ -64,7 +64,7 @@
 
     <div v-loading="loading" class="notes-content" aria-live="polite">
       <el-empty v-if="!loading && !notes.length" :description="keyword || documentId !== null ? '没有匹配的笔记' : '还没有笔记，阅读划词或手动记录一条吧'">
-        <el-button v-if="!keyword && documentId === null" type="primary" @click="openCreate">新建第一条笔记</el-button>
+        <el-button v-if="!isExperience && !keyword && documentId === null" type="primary" @click="openCreate">新建第一条笔记</el-button>
       </el-empty>
 
       <section v-for="group in displayGroups" :key="group.key" class="note-group">
@@ -107,7 +107,7 @@
                     class="source-link"
                     @click="locateSource(note)"
                 ><el-icon><Location /></el-icon>定位原文</button>
-                <el-dropdown trigger="click" @command="command => handleCardCommand(command, note)">
+                <el-dropdown v-if="!isExperience" trigger="click" @command="command => handleCardCommand(command, note)">
                   <button type="button" class="more-button" aria-label="笔记操作"><el-icon><MoreFilled /></el-icon></button>
                   <template #dropdown>
                     <el-dropdown-menu>
@@ -200,8 +200,8 @@
                 :icon="Location"
                 @click="locateSource(previewNote)"
             >定位原文</el-button>
-            <el-button :icon="EditPen" @click="openEdit(previewNote)">编辑</el-button>
-            <el-button type="danger" plain :icon="Delete" @click="deletePreviewNote">删除</el-button>
+            <el-button v-if="!isExperience" :icon="EditPen" @click="openEdit(previewNote)">编辑</el-button>
+            <el-button v-if="!isExperience" type="danger" plain :icon="Delete" @click="deletePreviewNote">删除</el-button>
           </div>
         </header>
         <h2>{{ previewNote.title }}</h2>
@@ -271,8 +271,10 @@ import {
 import { formatTime } from '@/utils/format'
 import { navigateToSource } from '@/utils/sourceAnchor'
 import { useListLoader } from '@/composables/useListLoader'
+import { getSession } from '@/utils/session'
 
 const router = useRouter()
+const isExperience = Boolean(getSession().is_experience)
 
 const notes = ref([])
 const total = ref(0)
@@ -444,6 +446,7 @@ function resetForm() {
 }
 
 async function openCreate() {
+  if (isExperience) return
   resetForm()
   editorVisible.value = true
   if (!availableDocuments.value.length) {
@@ -452,6 +455,7 @@ async function openCreate() {
 }
 
 function openEdit(note) {
+  if (isExperience) return
   previewVisible.value = false
   Object.assign(form, {
     id: note.id,
@@ -466,6 +470,7 @@ function openEdit(note) {
 }
 
 async function saveNote() {
+  if (isExperience) return
   if (!form.title.trim()) return ElMessage.warning('请输入笔记标题')
   if (!form.content.trim()) return ElMessage.warning('请输入笔记内容')
   saving.value = true

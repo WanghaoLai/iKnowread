@@ -15,7 +15,7 @@
           <strong>{{ highlight.selected_text }}</strong>
           <p>{{ highlight.remark || '暂无备注' }}</p>
         </button>
-        <div>
+        <div v-if="!readOnly">
           <button type="button" @click="$emit('edit', highlight)"><el-icon><Edit /></el-icon>编辑备注</button>
           <button type="button" class="danger" @click="$emit('remove', highlight)"><el-icon><Delete /></el-icon>删除</button>
         </div>
@@ -31,6 +31,7 @@ import { Close, Delete, Edit, Loading } from '@element-plus/icons-vue'
 const props = defineProps({
   highlights: { type: Array, required: true },
   loading: { type: Boolean, default: false },
+  readOnly: { type: Boolean, default: false },
 })
 defineEmits(['close', 'locate', 'edit', 'remove'])
 const items = computed(() => /** @type {any[]} */ (props.highlights))

@@ -148,6 +148,8 @@ async def update(account_id: int, data: dict) -> Account:
 async def _delete_consistently(account_id: int) -> None:
     async with account_lock(account_id):
         account = await get_by_id(account_id)
+        if account.is_experience:
+            raise CustomException("体验账号由体验管理页面维护，不能删除", status_code=409)
         prefix = f"{account.role}/{account.id}"
         storage = get_storage()
         staged = await run_storage_io(storage.stage_tree, prefix)

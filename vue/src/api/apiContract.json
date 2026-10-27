@@ -175,6 +175,22 @@
     "method": "POST",
     "path": "/documents"
   },
+  "experience.admin_documents": {
+    "method": "GET",
+    "path": "/admin/experience/documents"
+  },
+  "experience.admin_settings": {
+    "method": "GET",
+    "path": "/admin/experience"
+  },
+  "experience.me": {
+    "method": "GET",
+    "path": "/experience/me"
+  },
+  "experience.update_admin_settings": {
+    "method": "PUT",
+    "path": "/admin/experience"
+  },
   "files.upload": {
     "method": "POST",
     "path": "/files/upload"

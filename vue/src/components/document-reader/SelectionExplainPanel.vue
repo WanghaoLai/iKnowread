@@ -25,7 +25,7 @@
       </div>
       <div v-else class="selection-explain-answer">{{ explain.answer }}</div>
 
-      <div v-if="selectionHighlight.open && !selectionHighlight.saved" class="selection-note-compose selection-highlight-compose">
+      <div v-if="!readOnly && selectionHighlight.open && !selectionHighlight.saved" class="selection-note-compose selection-highlight-compose">
         <label for="selection-highlight-remark">高亮备注（可选）</label>
         <textarea
             id="selection-highlight-remark"
@@ -44,7 +44,7 @@
         </div>
       </div>
 
-      <div v-if="explain.noteOpen && !explain.noteSaved" class="selection-note-compose">
+      <div v-if="!readOnly && explain.noteOpen && !explain.noteSaved" class="selection-note-compose">
         <label for="selection-note-remark">添加个人备注（可选）</label>
         <textarea
             id="selection-note-remark"
@@ -65,10 +65,10 @@
 
       <footer v-if="explain.sourceAnchor" class="selection-explain-footer">
         <div class="selection-footer-actions">
-          <button v-if="selectionHighlight.saved" type="button" class="highlight-saved" @click="$emit('show-highlight')">
+          <button v-if="!readOnly && selectionHighlight.saved" type="button" class="highlight-saved" @click="$emit('show-highlight')">
             <el-icon><CollectionTag /></el-icon>已高亮 · 查看
           </button>
-          <template v-else>
+          <template v-else-if="!readOnly">
             <button type="button" :disabled="selectionHighlight.saving" @click="$emit('save-highlight')">
               <el-icon><CollectionTag /></el-icon>{{ selectionHighlight.saving ? '保存中…' : '保存高亮' }}
             </button>
@@ -79,10 +79,10 @@
           <button v-if="explain.answer" type="button" @click="$emit('copy')">
             <el-icon><CopyDocument /></el-icon>{{ explain.copied ? '已复制' : '复制' }}
           </button>
-          <button v-if="explain.answer && explain.noteSaved" type="button" class="note-saved" @click="$emit('show-notes')">
+          <button v-if="!readOnly && explain.answer && explain.noteSaved" type="button" class="note-saved" @click="$emit('show-notes')">
             <el-icon><Notebook /></el-icon>已加入 · 查看
           </button>
-          <template v-else-if="explain.answer">
+          <template v-else-if="!readOnly && explain.answer">
             <button type="button" :disabled="explain.noteSaving" @click="$emit('save-note')">
               <el-icon><Notebook /></el-icon>{{ explain.noteSaving ? '添加中…' : '一键添加' }}
             </button>
@@ -103,6 +103,7 @@ import { Close, CollectionTag, CopyDocument, Loading, Notebook } from '@element-
 defineProps({
   explain: { type: Object, required: true },
   selectionHighlight: { type: Object, required: true },
+  readOnly: { type: Boolean, default: false },
 })
 defineEmits([
   'close', 'configure', 'retry', 'save-highlight', 'cancel-highlight', 'toggle-highlight',

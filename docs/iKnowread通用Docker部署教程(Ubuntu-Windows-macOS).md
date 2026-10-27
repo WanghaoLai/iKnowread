@@ -73,7 +73,7 @@
 
 项目中的生产登录 Cookie 设置了 `Secure`，所以**正式使用必须通过 HTTPS 登录**。直接打开 `http://服务器IP` 不是本教程的登录方案，也不要为此把 `DEBUG` 改成 `true`。
 
-生产镜像的 Python、Node、MySQL、Go 和 Alpine 基础镜像使用 digest 固定，Python 完整依赖闭包保存在 `fastapi-app/requirements.lock`，前端由 `package-lock.json` 和 `npm ci` 固定。Web 使用 Go 1.26.9 构建 Caddy 2.11.7；MySQL 运行镜像移除了非运行必需的 mysql-shell，并用 Go 1.26.9 重建 gosu。固定版本仍不等于字节级可复现，因此每次发布都要重新运行依赖审计和最终镜像扫描。
+生产镜像的 Python、Node、MySQL、Go 和 Alpine 基础镜像使用 digest 固定，Python 完整依赖闭包保存在 `fastapi-app/requirements.lock`，前端由 `package-lock.json` 和 `npm ci` 固定。Web 使用 Go 1.26.9 构建 Caddy 2.11.7；MySQL 运行镜像移除了非运行必需的 mysql-shell，并用 Go 1.26.9 重建 gosu。backend 和 crawler 使用明确的 `DEBIAN_SECURITY_REFRESH` 纪元使受审核的 Debian 安全更新在本地与服务器缓存中同时失效。固定版本仍不等于字节级可复现，因此每次发布都要重新运行依赖审计和最终镜像扫描。
 
 Caddy 以 UID/GID `10002:10002` 运行，根文件系统只读，并移除全部 Linux capabilities。后端以 `10001:10001` 运行并采用相同的只读与能力收紧。HTTPS 响应先使用 `max-age=86400` 的短周期 HSTS；只有真实域名连续稳定并确认子域策略后，才考虑延长或加入 `includeSubDomains`。
 

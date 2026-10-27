@@ -29,6 +29,7 @@ export function buildPreviewModel(row) {
     sourceUrl: row.source_url || '',
     sourceTitle: row.source_title || '',
     sourceFetchedAt: row.source_fetched_at || '',
+    readOnly: Boolean(row.read_only),
   }
 }
 

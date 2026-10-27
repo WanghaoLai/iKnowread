@@ -1,7 +1,9 @@
 <template>
   <div>
 
-    <div id="web-import-section" class="card web-import-card">
+    <el-alert v-if="isExperience" class="experience-readonly" title="体验账号仅可阅读管理员共享的文档，不可上传、导入、重试处理或删除。" type="warning" show-icon :closable="false" />
+
+    <div v-if="!isExperience" id="web-import-section" class="card web-import-card">
       <div class="web-import-title">收藏网页</div>
       <div class="web-import-form">
         <el-input
@@ -56,7 +58,7 @@
       <div v-if="webJobsError" class="web-job-error web-job-list-error">{{ webJobsError }}</div>
     </div>
 
-    <div id="upload-section" class="card upload-card">
+    <div v-if="!isExperience" id="upload-section" class="card upload-card">
       <el-upload
           class="doc-upload"
           drag
@@ -132,6 +134,7 @@
                 @click="retryOcr(scope.row)"
             >重试识别</el-button>
             <el-button
+                v-if="!isExperience"
                 type="danger"
                 size="small"
                 :icon="Delete"
@@ -174,11 +177,13 @@ import {
   retryWebImport,
 } from '@/api/webImports'
 import { getCapabilities } from '@/api/auth'
+import { getSession } from '@/utils/session'
 
 const ALLOWED_EXTS = ['pdf', 'docx', 'md']
 const MAX_SIZE = 50 * 1024 * 1024
 const MARKDOWN_MAX_SIZE = 5 * 1024 * 1024
 const route = useRoute()
+const isExperience = Boolean(getSession().is_experience)
 const initialName = typeof route.query.name === 'string' ? route.query.name.slice(0, 255) : null
 
 const data = reactive({
@@ -470,7 +475,7 @@ const reset = () => {
   load()
 }
 
-const canRetryOcr = (row) => row.ext === 'pdf' && row.ocr_status === 'failed' && row.ocr_error !== 'OCR 服务未启用'
+const canRetryOcr = (row) => !isExperience && row.ext === 'pdf' && row.ocr_status === 'failed' && row.ocr_error !== 'OCR 服务未启用'
 const processingLabel = (status, stage = {}) => {
   if (stage.error === 'OCR 服务未启用') return '未启用'
   return ({
@@ -487,7 +492,7 @@ const processingType = status => ({
 })[status] || 'info'
 
 load()
-initializeWebImports()
+if (!isExperience) initializeWebImports()
 onMounted(async () => {
   const target = ({ upload: 'upload-section', 'web-import': 'web-import-section' })[route.query.focus]
   if (!target) return
@@ -508,6 +513,7 @@ onBeforeUnmount(() => {
 .upload-card {
   margin-bottom: 5px;
 }
+.experience-readonly { margin-bottom: 10px; }
 .web-import-card {
   margin-bottom: 5px;
 }

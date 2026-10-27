@@ -5,6 +5,7 @@ from app.common.result import PageInfo, Result
 from app.dependencies import CurrentAccount, get_current_account, require_admin, require_self_or_admin
 from app.schemas.account import AccountCreate, AccountPublic, AccountUpdate
 from app.services import account_service
+from app.services import experience_service
 
 router = APIRouter(prefix=ACCOUNTS_PREFIX)
 
@@ -17,6 +18,8 @@ async def add(payload: AccountCreate, _=Depends(require_admin)):
 
 @router.put(ACCOUNTS_ITEM_ROUTE)
 async def update(account_id: int, payload: AccountUpdate, current: CurrentAccount = Depends(get_current_account)):
+    if current.id == account_id:
+        experience_service.deny_experience_write(current, "修改体验账号资料")
     await account_service.get_by_id(account_id)
     require_self_or_admin(current, account_id)
     updated = await account_service.update(account_id, payload.model_dump(exclude_unset=True))

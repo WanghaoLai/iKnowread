@@ -10,4 +10,4 @@ router = APIRouter()
 
 @router.get("/dashboard")
 async def dashboard(current: CurrentAccount = Depends(get_current_account)):
-    return Result.success(await dashboard_service.summary(current.id))
+    return Result.success(await dashboard_service.summary(current))

@@ -18,6 +18,9 @@ test('renders shared API paths with validated identifiers', () => {
   assert.equal(apiPath('announcements.admin_list'), '/admin/announcements')
   assert.equal(apiPath('announcements.status', { announcement_id: 8 }), '/admin/announcements/8/status')
   assert.equal(apiMethod('announcements.delete'), 'DELETE')
+  assert.equal(apiPath('experience.me'), '/experience/me')
+  assert.equal(apiPath('experience.admin_settings'), '/admin/experience')
+  assert.equal(apiMethod('experience.update_admin_settings'), 'PUT')
 })
 
 test('rejects missing, invalid and unknown API path inputs', () => {

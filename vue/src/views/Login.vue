@@ -4,6 +4,14 @@
       <div class="login-logo"><img src="@/assets/imgs/logo.png" alt="iKnowread"></div>
       <div class="login-title">iKnowread</div>
       <div class="login-sub">欢 迎 登 录</div>
+      <section v-if="experienceAccount.enabled" class="experience-login" aria-label="在线体验账号">
+        <div><strong>在线体验账号</strong><span>无需注册，立即体验文档阅读与 AI 划词</span></div>
+        <dl>
+          <div><dt>账号</dt><dd>{{ experienceAccount.username }}</dd></div>
+          <div><dt>密码</dt><dd>{{ experienceAccount.password }}</dd></div>
+        </dl>
+        <button type="button" @click="fillExperienceAccount">一键填入</button>
+      </section>
       <el-form ref="formRef" :model="data.form" :rules="data.rules" @submit.prevent="login">
         <el-form-item prop="username">
           <el-input
@@ -121,6 +129,7 @@
   const passwordInputRef = ref()
   const captchaInputRef = ref()
   const registrationEnabled = ref(false)
+  const experienceAccount = reactive({ enabled: false, username: '', password: '' })
   const submitting = ref(false)
   const loginError = ref('')
   const captchaImage = ref('')
@@ -131,6 +140,7 @@
     try {
       const res = await getCapabilities({ skipErrorToast: true })
       registrationEnabled.value = Boolean(res.data?.registration_enabled)
+      Object.assign(experienceAccount, res.data?.experience_account || {})
     } catch (_) {
       registrationEnabled.value = false
     }
@@ -139,6 +149,15 @@
 
   const clearLoginError = () => {
     loginError.value = ''
+  }
+
+  const fillExperienceAccount = () => {
+    data.form.username = experienceAccount.username
+    data.form.password = experienceAccount.password
+    data.form.role = 'user'
+    clearLoginError()
+    formRef.value?.clearValidate(['username', 'password', 'role'])
+    captchaInputRef.value?.focus()
   }
 
   const onCaptchaInput = (value) => {
@@ -219,6 +238,15 @@
 <style scoped>
 /* 样式复用 assets/css/auth.css */
 .login-error { margin: -4px 0 18px; }
+.experience-login { position: relative; margin: -6px 0 16px; padding: 12px; color: #24425c; background: linear-gradient(135deg, #eaf3ff, #e8fbf8); border: 1px solid #a9d9e6; border-radius: 11px; }
+.experience-login > div:first-child strong, .experience-login > div:first-child span { display: block; }
+.experience-login > div:first-child strong { color: #0045b7; font-size: 14px; }
+.experience-login > div:first-child span { margin-top: 3px; color: #58748b; font-size: 11px; }
+.experience-login dl { display: flex; gap: 8px; margin: 9px 84px 0 0; }
+.experience-login dl div { display: flex; align-items: center; gap: 5px; }
+.experience-login dt { color: #7890a3; font-size: 10px; }
+.experience-login dd { margin: 0; color: #163d62; font: 600 12px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.experience-login > button { position: absolute; right: 11px; bottom: 11px; padding: 6px 9px; color: #fff; font: inherit; font-size: 11px; font-weight: 600; background: var(--ik-gradient); border: 0; border-radius: 7px; cursor: pointer; }
 .login-error :deep(.el-alert__title) { line-height: 1.5; }
 .captcha-field { width: 100%; }
 .captcha-row { display: flex; align-items: stretch; gap: 10px; }

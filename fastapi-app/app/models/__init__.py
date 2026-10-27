@@ -7,3 +7,4 @@ from app.models.processing_task import DocumentProcessingTask  # noqa: F401
 from app.models.web_import_job import WebImportJob  # noqa: F401
 from app.models.reading_progress import ReadingProgress  # noqa: F401
 from app.models.announcement import Announcement, AnnouncementRead  # noqa: F401
+from app.models.experience import ExperienceDocumentShare, ExperiencePolicy  # noqa: F401

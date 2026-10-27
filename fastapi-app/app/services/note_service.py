@@ -6,7 +6,7 @@ from tortoise.transactions import in_transaction
 
 from app.common.exception_handler import CustomException
 from app.dependencies import CurrentAccount, require_document_owner
-from app.models import Account, Document, Note
+from app.models import Account, Document, ExperienceDocumentShare, Note
 from app.schemas.note import NoteCreate, NotePublic, NoteUpdate
 from app.services.ai_providers import get_provider
 from app.config import settings
@@ -76,6 +76,8 @@ def _default_title(payload: NoteCreate, document_name: str | None) -> str:
 
 
 async def create(current: CurrentAccount, payload: NoteCreate) -> dict:
+    from app.services import experience_service
+    experience_service.deny_experience_write(current, "添加笔记")
     document = None
     if payload.document_id is not None:
         document = await Document.get_or_none(id=payload.document_id, deleted_at__isnull=True)
@@ -144,12 +146,82 @@ async def select_page(
     }
 
 
+async def select_page_current(
+    current: CurrentAccount,
+    keyword: str,
+    document_id: int | None,
+    unlinked: bool,
+    document_name: str | None,
+    sort: str,
+    page_num: int,
+    page_size: int,
+) -> dict:
+    if not current.is_experience:
+        return await select_page(
+            current.id, keyword, document_id, unlinked, document_name,
+            sort, page_num, page_size,
+        )
+    from app.services import experience_service
+    policy = await experience_service.require_enabled(current)
+    if not policy.show_notes or unlinked or document_name is not None:
+        return {"total": 0, "list": []}
+    shared_ids = list(await ExperienceDocumentShare.filter(
+        account_id=current.id,
+        document__account__role="admin",
+        document__deleted_at__isnull=True,
+    ).values_list("document_id", flat=True))
+    query = Note.filter(document_id__in=shared_ids, account__role="admin")
+    if keyword := keyword.strip():
+        query = query.filter(
+            Q(title__icontains=keyword)
+            | Q(document_name__icontains=keyword)
+            | Q(selected_text__icontains=keyword)
+            | Q(content__icontains=keyword)
+            | Q(remark__icontains=keyword)
+        )
+    if document_id is not None:
+        query = query.filter(document_id=document_id)
+    notes = await _ordered(query, sort).offset((page_num - 1) * page_size).limit(page_size)
+    document_states = await _document_states(notes)
+    items = [serialize(note, document_states) for note in notes]
+    for item in items:
+        item["read_only"] = True
+    return {"total": await query.count(), "list": items}
+
+
 async def summary(account_id: int) -> dict:
     # 返回原始 document_name（可空）：已删文档的笔记按原名各自分组，
     # 前端用「name:文档名」精确过滤，避免多个已删文档的笔记混在一个筛选里。
     rows = await Note.filter(account_id=account_id).group_by(
         "document_id", "document_name"
     ).annotate(count=Count("id")).values("document_id", "document_name", "count")
+    items = [{
+        "document_id": row["document_id"],
+        "document_name": row["document_name"],
+        "count": int(row["count"]),
+    } for row in rows]
+    items.sort(key=lambda item: (-item["count"], item["document_name"] or ""))
+    return {"total": sum(item["count"] for item in items), "documents": items}
+
+
+async def summary_current(current: CurrentAccount) -> dict:
+    if not current.is_experience:
+        return await summary(current.id)
+    from app.services import experience_service
+    policy = await experience_service.require_enabled(current)
+    if not policy.show_notes:
+        return {"total": 0, "documents": []}
+    shared_ids = list(await ExperienceDocumentShare.filter(
+        account_id=current.id,
+        document__account__role="admin",
+        document__deleted_at__isnull=True,
+    ).values_list("document_id", flat=True))
+    rows = await Note.filter(
+        document_id__in=shared_ids,
+        account__role="admin",
+    ).group_by("document_id", "document_name").annotate(
+        count=Count("id")
+    ).values("document_id", "document_name", "count")
     items = [{
         "document_id": row["document_id"],
         "document_name": row["document_name"],
