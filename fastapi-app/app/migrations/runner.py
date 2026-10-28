@@ -26,6 +26,7 @@ from app.migrations import (
     v019_announcements,
     v020_experience_account,
     v021_bootstrap_experience_account,
+    v022_repair_experience_collision,
 )
 
 MIGRATIONS = (
@@ -50,18 +51,23 @@ MIGRATIONS = (
     v019_announcements,
     v020_experience_account,
     v021_bootstrap_experience_account,
+    v022_repair_experience_collision,
 )
 
-# v020 was exercised locally before its first release and then corrected to
-# remove MySQL's deprecated VALUES(col) upsert syntax. Accept only those exact
-# pre-release checksums once, adopt the corrected checksum, and keep rejecting
-# every other form of applied-migration drift.
+# v020/v021 originally inferred ownership of the common username `test` and
+# could overwrite a real account.  Their corrected forms are safe for upgrades
+# that have not reached those versions yet.  Accept only the exact reviewed old
+# checksums on already-upgraded installations; v022 then quarantines collisions.
 LEGACY_MIGRATION_CHECKSUMS = {
     20: frozenset(
         {
             "20b9ce4606e0cd3533aa780c42c67918b45d8f4119d53798214f04de244c4602",
             "9739dc7522c72ca2b74635aaa17ea61be9cad1e459c1cf332d640100f4b4059c",
+            "ed79bd800aea49f82257747c6a4eb7c418df916fc5ae6d7def0088658ba72603",
         }
+    ),
+    21: frozenset(
+        {"d4870d0b4f07db418d57f1953e15c70803304577351a7fd9cebf758eff2ce659"}
     ),
 }
 

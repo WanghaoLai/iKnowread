@@ -86,23 +86,5 @@ async def upgrade(connection=None) -> None:
             await connection.execute_query(
                 f"ALTER TABLE `{table}` ADD CONSTRAINT `{name}` {definition}"
             )
-    await connection.execute_query(
-        "UPDATE `account` SET `is_experience`=TRUE "
-        "WHERE `username`='test' AND `role`='user'"
-    )
-    await connection.execute_query(
-        """
-        INSERT INTO `experience_policy`
-          (`account_id`, `enabled`, `public_password`, `daily_ai_limit`,
-           `show_highlights`, `show_notes`)
-        SELECT `candidate`.`id`, TRUE, 'test1234', 20, TRUE, TRUE
-        FROM `account` AS `candidate`
-        WHERE `candidate`.`username`='test'
-          AND `candidate`.`role`='user'
-          AND `candidate`.`is_experience`=TRUE
-          AND NOT EXISTS (
-            SELECT 1 FROM `experience_policy` AS `existing`
-            WHERE `existing`.`account_id`=`candidate`.`id`
-          )
-        """
-    )
+    # Account provisioning belongs to v021.  This schema migration must never
+    # infer ownership of an existing identity from a common username.

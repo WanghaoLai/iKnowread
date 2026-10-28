@@ -24,7 +24,7 @@ from app.services.ai_guard import ai_request_slot
 
 @lru_cache(maxsize=1)
 def key_cipher():
-    key = settings.AI_CONFIG_KEY
+    key: str | bytes = settings.AI_CONFIG_KEY
     if not key:
         # 独立于登录密钥；重启或退出登录不会使配置失效。文件不在上传目录内。
         path = BASE_DIR / "data" / ".ai-config-key"

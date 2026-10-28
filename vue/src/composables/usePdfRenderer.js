@@ -1,5 +1,5 @@
 import { nextTick } from 'vue'
-import * as pdfjsLib from 'pdfjs-dist'
+import { loadPdfEngine } from '../utils/documentEngines.js'
 
 export const isPdfRenderCancellation = exception => (
   ['RenderingCancelledException', 'AbortException'].includes(exception?.name)
@@ -25,7 +25,10 @@ export const usePdfRenderer = ({
   onProgress,
   onError,
   readingModeStorageKey,
-  createTextLayer = options => new pdfjsLib.TextLayer(options),
+  createTextLayer = async options => {
+    const pdfjs = await loadPdfEngine()
+    return new pdfjs.TextLayer(options)
+  },
 }) => {
   let renderTask = null
   let textLayer = null
@@ -114,7 +117,7 @@ export const usePdfRenderer = ({
       if (dpr !== 1) params.transform = [dpr, 0, 0, dpr, 0, 0]
       const task = page.render(params)
       entry.renderTask = task
-      const currentTextLayer = createTextLayer({
+      const currentTextLayer = await createTextLayer({
         textContentSource: page.streamTextContent({ includeMarkedContent: true, disableNormalization: true }),
         container: entry.textContainer,
         viewport,
@@ -231,7 +234,7 @@ export const usePdfRenderer = ({
     if (dpr !== 1) params.transform = [dpr, 0, 0, dpr, 0, 0]
     const task = page.render(params)
     renderTask = task
-    const currentTextLayer = createTextLayer({
+    const currentTextLayer = await createTextLayer({
       textContentSource: page.streamTextContent({ includeMarkedContent: true, disableNormalization: true }),
       container: layerContainer,
       viewport,

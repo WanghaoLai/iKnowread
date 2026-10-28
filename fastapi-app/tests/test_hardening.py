@@ -3,7 +3,9 @@ import ast
 import io
 import asyncio
 import json
+import os
 import re
+import shutil
 import sys
 import tempfile
 import threading
@@ -15,7 +17,7 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 import pypdfium2
-from fastapi import HTTPException, Request
+from fastapi import HTTPException, Request, UploadFile
 from PIL import Image
 from tortoise import Tortoise
 
@@ -26,7 +28,7 @@ import app.routers.files as files_router
 from app import create_app
 from app import database
 from app.api_paths import API_CONTRACT, DOCUMENT_UPLOAD_PATH, UPLOAD_PATHS
-from app.config import Settings, settings
+from app.config import Settings, settings, settings_env_file
 from app.dependencies import CurrentAccount, get_current_account
 from app.migrations.v001_unify_accounts import (
     _move_account_directories,
@@ -42,7 +44,7 @@ from app.migrations import (
     v016_web_imports,
     v017_web_import_lifecycle,
 )
-from app.models import Account, Document, Note
+from app.models import Account, Document, DocumentProcessingTask, Note
 from app.schemas.document import DocumentPublic
 from app.schemas.account import normalize_username
 from app.services import (
@@ -53,6 +55,7 @@ from app.services import (
     captcha_service,
     document_service,
     ocr_service,
+    processing_task_service,
 )
 from app.services.auth_guard import limit_auth, limiter
 from app.security import (
@@ -210,6 +213,12 @@ class ConfigurationTests(unittest.TestCase):
         self.assertFalse(configured.DB_AUTO_CREATE)
         self.assertEqual(configured.CORS_ORIGINS, "")
 
+    def test_release_runner_can_disable_local_env_file(self):
+        with patch.dict(os.environ, {"IKNOWREAD_ENV_FILE": "/dev/null"}):
+            self.assertEqual(settings_env_file(), "/dev/null")
+        with patch.dict(os.environ, {"IKNOWREAD_ENV_FILE": ""}):
+            self.assertIsNone(settings_env_file())
+
     def test_migration_checksum_detects_source_drift(self):
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / "migration.py"
@@ -220,11 +229,17 @@ class ConfigurationTests(unittest.TestCase):
             source.write_text("VERSION = 1\nNAME = 'changed'\n", encoding="utf-8")
             self.assertNotEqual(first, migration_checksum(migration))
 
-    def test_v020_accepts_only_reviewed_legacy_checksum(self):
-        current = "ed79bd800aea49f82257747c6a4eb7c418df916fc5ae6d7def0088658ba72603"
+    def test_experience_migrations_accept_only_reviewed_legacy_checksums(self):
+        from app.migrations import (
+            v020_experience_account,
+            v021_bootstrap_experience_account,
+        )
+
+        current = migration_checksum(v020_experience_account)
         legacy = {
             "20b9ce4606e0cd3533aa780c42c67918b45d8f4119d53798214f04de244c4602",
             "9739dc7522c72ca2b74635aaa17ea61be9cad1e459c1cf332d640100f4b4059c",
+            "ed79bd800aea49f82257747c6a4eb7c418df916fc5ae6d7def0088658ba72603",
         }
 
         self.assertEqual(LEGACY_MIGRATION_CHECKSUMS[20], frozenset(legacy))
@@ -233,6 +248,11 @@ class ConfigurationTests(unittest.TestCase):
             self.assertTrue(migration_checksum_is_compatible(20, checksum, current))
         self.assertFalse(migration_checksum_is_compatible(20, "0" * 64, current))
         self.assertFalse(migration_checksum_is_compatible(19, next(iter(legacy)), current))
+        previous_v021 = "d4870d0b4f07db418d57f1953e15c70803304577351a7fd9cebf758eff2ce659"
+        self.assertEqual(LEGACY_MIGRATION_CHECKSUMS[21], frozenset({previous_v021}))
+        self.assertTrue(migration_checksum_is_compatible(
+            21, previous_v021, migration_checksum(v021_bootstrap_experience_account)
+        ))
 
     def test_v020_avoids_deprecated_mysql_values_function(self):
         from app.migrations import v020_experience_account
@@ -249,15 +269,17 @@ class ConfigurationTests(unittest.TestCase):
             v019_announcements,
             v020_experience_account,
             v021_bootstrap_experience_account,
+            v022_repair_experience_collision,
         )
 
-        self.assertIs(MIGRATIONS[-1], v021_bootstrap_experience_account)
+        self.assertIs(MIGRATIONS[-1], v022_repair_experience_collision)
         self.assertEqual(v016_web_imports.VERSION, 16)
         self.assertEqual(v017_web_import_lifecycle.VERSION, 17)
         self.assertEqual(v018_dashboard_reading_progress.VERSION, 18)
         self.assertEqual(v019_announcements.VERSION, 19)
         self.assertEqual(v020_experience_account.VERSION, 20)
         self.assertEqual(v021_bootstrap_experience_account.VERSION, 21)
+        self.assertEqual(v022_repair_experience_collision.VERSION, 22)
 
 
 class _MarkdownMigrationConnection:
@@ -605,6 +627,140 @@ class HardeningAPITests(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(await Account.filter(id=account.id).exists())
         self.assertFalse(storage.exists(key))
+
+    async def test_cancelled_document_save_removes_file_row_and_processing_task(self):
+        storage = get_storage()
+        original_save = storage.save
+        saved = asyncio.Event()
+        release = asyncio.Event()
+        keys: list[str] = []
+
+        async def held_save(*args, **kwargs):
+            key = await original_save(*args, **kwargs)
+            keys.append(key)
+            saved.set()
+            await release.wait()
+            return key
+
+        content = b"# cancelled upload\n"
+        file = UploadFile(
+            filename="cancelled.md", file=io.BytesIO(content), size=len(content)
+        )
+        with patch.object(storage, "save", side_effect=held_save):
+            upload = asyncio.create_task(
+                document_service.upload(self.user.id, self.user.role, file)
+            )
+            await asyncio.wait_for(saved.wait(), timeout=1)
+            upload.cancel()
+            release.set()
+            with self.assertRaises(asyncio.CancelledError):
+                await upload
+
+        self.assertEqual(await Document.filter(account_id=self.user.id).count(), 0)
+        self.assertEqual(await DocumentProcessingTask.all().count(), 0)
+        self.assertEqual(len(keys), 1)
+        self.assertFalse(storage.exists(keys[0]))
+
+    async def test_cancelled_local_storage_save_removes_worker_output(self):
+        storage = get_storage()
+        original_copy = shutil.copyfileobj
+        started = threading.Event()
+        release = threading.Event()
+
+        def held_copy(source, destination):
+            started.set()
+            if not release.wait(timeout=1):
+                raise AssertionError("cancelled copy worker was abandoned")
+            return original_copy(source, destination)
+
+        with patch("app.storage.local.shutil.copyfileobj", side_effect=held_copy):
+            save = asyncio.create_task(
+                storage.save(
+                    "cancelled.bin",
+                    io.BytesIO(b"cancelled"),
+                    subdir=f"user/{self.user.id}/documents",
+                )
+            )
+            self.assertTrue(await asyncio.to_thread(started.wait, 1))
+            save.cancel()
+            release.set()
+            with self.assertRaises(asyncio.CancelledError):
+                await save
+
+        self.assertEqual(
+            storage.iter_keys(f"user/{self.user.id}/documents"), []
+        )
+
+    async def test_cancelled_document_task_initialization_rolls_back_publication(self):
+        storage = get_storage()
+        entered = asyncio.Event()
+        release = asyncio.Event()
+        document_ids: list[int] = []
+        keys: list[str] = []
+
+        async def held_initialize(document):
+            document_ids.append(document.id)
+            keys.append(document.path.removeprefix("files/download/"))
+            entered.set()
+            await release.wait()
+            await DocumentProcessingTask.create(
+                document_id=document.id,
+                task_type="ocr",
+                status="not_applicable",
+                progress=0,
+                attempt_count=0,
+            )
+
+        content = b"# cancelled initialization\n"
+        file = UploadFile(
+            filename="cancelled.md", file=io.BytesIO(content), size=len(content)
+        )
+        with patch.object(
+            processing_task_service, "initialize_document", side_effect=held_initialize
+        ):
+            upload = asyncio.create_task(
+                document_service.upload(self.user.id, self.user.role, file)
+            )
+            await asyncio.wait_for(entered.wait(), timeout=1)
+            upload.cancel()
+            release.set()
+            with self.assertRaises(asyncio.CancelledError):
+                await upload
+
+        self.assertEqual(len(document_ids), 1)
+        self.assertFalse(await Document.filter(id=document_ids[0]).exists())
+        self.assertEqual(await DocumentProcessingTask.all().count(), 0)
+        self.assertFalse(storage.exists(keys[0]))
+
+    async def test_cancelled_avatar_save_removes_unpublished_file(self):
+        storage = get_storage()
+        original_save = storage.save
+        saved = asyncio.Event()
+        release = asyncio.Event()
+        keys: list[str] = []
+
+        async def held_save(*args, **kwargs):
+            key = await original_save(*args, **kwargs)
+            keys.append(key)
+            saved.set()
+            await release.wait()
+            return key
+
+        png = small_png()
+        file = UploadFile(filename="avatar.png", file=io.BytesIO(png), size=len(png))
+        current = CurrentAccount(self.user.id, self.user.role, self.user)
+        with patch.object(storage, "save", side_effect=held_save):
+            upload = asyncio.create_task(
+                files_router.upload_file(file, None, None, current)
+            )
+            await asyncio.wait_for(saved.wait(), timeout=1)
+            upload.cancel()
+            release.set()
+            with self.assertRaises(asyncio.CancelledError):
+                await upload
+
+        self.assertEqual(len(keys), 1)
+        self.assertFalse(storage.exists(keys[0]))
 
     async def test_avatar_requires_a_complete_decodable_image(self):
         response = await self.client.post(

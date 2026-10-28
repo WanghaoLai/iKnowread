@@ -64,8 +64,10 @@ async def preview_storage_key(doc: Document) -> str:
     derived = derived_storage_key(doc)
     # 重新处理期间继续提供上一份成功产物。新产物只有在数据库中的路径、
     # 状态和派生更新时间原子切换后才会对用户可见。
-    if derived and await run_storage_io(storage.exists, derived):
-        return derived
+    if derived:
+        exists = await run_storage_io(storage.exists, derived)
+        if exists:
+            return derived
     from app.services.document_service import storage_key
     return storage_key(doc)
 
@@ -190,11 +192,12 @@ async def stop() -> None:
 
 
 async def enqueue(doc_id: int) -> None:
-    if not is_available() or doc_id in _queued_ids:
+    queue = _queue
+    if not is_available() or queue is None or doc_id in _queued_ids:
         return
     _queued_ids.add(doc_id)
-    await _queue.put(doc_id)
-    logger.info("OCR job queued document=%s queue_depth=%s", doc_id, _queue.qsize())
+    await queue.put(doc_id)
+    logger.info("OCR job queued document=%s queue_depth=%s", doc_id, queue.qsize())
 
 
 async def retry(doc: Document) -> None:

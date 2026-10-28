@@ -1,8 +1,9 @@
 import asyncio
+import warnings
 
 from tortoise import Tortoise
 
-from app.security import hash_password, password_needs_rehash, verify_password
+from app.security import hash_password
 
 
 VERSION = 21
@@ -13,14 +14,8 @@ EXPERIENCE_PASSWORD = "test1234"
 EXPERIENCE_NAME = "在线体验"
 
 
-async def _password_is_current(stored: str | None) -> bool:
-    if password_needs_rehash(stored):
-        return False
-    return await asyncio.to_thread(verify_password, EXPERIENCE_PASSWORD, stored)
-
-
 async def upgrade(connection=None) -> None:
-    """Ensure the advertised experience identity and its default policy exist."""
+    """Create an experience identity only when its username is unclaimed."""
     connection = connection or Tortoise.get_connection("default")
     rows = await connection.execute_query_dict(
         "SELECT `id`, `role`, `password`, `is_experience` FROM `account` "
@@ -29,22 +24,29 @@ async def upgrade(connection=None) -> None:
     )
     if rows:
         account = rows[0]
-        if account["role"] != "user":
-            raise RuntimeError("账号 test 已存在但不是普通用户，无法初始化体验账号")
         account_id = int(account["id"])
-        if await _password_is_current(account.get("password")):
-            if not account.get("is_experience"):
-                await connection.execute_query(
-                    "UPDATE `account` SET `is_experience`=TRUE WHERE `id`=%s",
-                    [account_id],
-                )
-        else:
-            password_hash = await asyncio.to_thread(hash_password, EXPERIENCE_PASSWORD)
+        # An older v020 may already have marked the colliding account and
+        # created a public policy.  Undo only that metadata; never modify the
+        # account's password, role, name, session version, or owned data.
+        await connection.execute_query(
+            "DELETE FROM `experience_document_share` WHERE `account_id`=%s",
+            [account_id],
+        )
+        await connection.execute_query(
+            "DELETE FROM `experience_policy` WHERE `account_id`=%s",
+            [account_id],
+        )
+        if account.get("is_experience"):
             await connection.execute_query(
-                "UPDATE `account` SET `password`=%s, `is_experience`=TRUE, "
-                "`session_version`=`session_version`+1 WHERE `id`=%s",
-                [password_hash, account_id],
+                "UPDATE `account` SET `is_experience`=FALSE WHERE `id`=%s",
+                [account_id],
             )
+        warnings.warn(
+            "账号 test 已存在；为保护既有身份，在线体验账号未自动创建",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return
     else:
         password_hash = await asyncio.to_thread(hash_password, EXPERIENCE_PASSWORD)
         await connection.execute_query(

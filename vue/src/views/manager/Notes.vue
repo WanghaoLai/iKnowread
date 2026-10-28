@@ -271,7 +271,15 @@ import {
 import { formatTime } from '@/utils/format'
 import { navigateToSource } from '@/utils/sourceAnchor'
 import { useListLoader } from '@/composables/useListLoader'
+import { useNoteSelection } from '@/composables/useNoteSelection'
 import { getSession } from '@/utils/session'
+import {
+  groupNotes,
+  noteDocumentNameFilter,
+  noteDocumentStatus,
+  noteGroupLabel,
+  noteGroupValue,
+} from '@/features/notes/noteList'
 
 const router = useRouter()
 const isExperience = Boolean(getSession().is_experience)
@@ -289,16 +297,7 @@ onMounted(async () => {
 })
 const sourceLabel = (note) =>
     [providerNames[note.provider] || note.provider, note.model].filter(Boolean).join(' · ')
-const documentStatuses = Object.freeze({
-  available: { label: '可阅读', type: 'success' },
-  recycled: { label: '回收站', type: 'warning' },
-  deleted: { label: '原文已删除', type: 'danger' },
-  unlinked: { label: '未关联', type: 'info' },
-})
-const documentStatus = note => documentStatuses[note.document_status] || (
-  note.document_id ? documentStatuses.available
-    : note.document_name ? documentStatuses.deleted : documentStatuses.unlinked
-)
+const documentStatus = noteDocumentStatus
 const exporting = ref(false)
 const saving = ref(false)
 const keyword = ref('')
@@ -311,8 +310,6 @@ const summary = reactive({ total: 0, documents: [] })
 const availableDocuments = ref([])
 const previewVisible = ref(false)
 const previewNote = ref(null)
-const selectionMode = ref(false)
-const selectedNoteIds = ref(new Set())
 const exportDocumentVisible = ref(false)
 const exportDocumentValue = ref(null)
 const editorVisible = ref(false)
@@ -321,29 +318,23 @@ let searchTimer = null
 
 // 已删文档的笔记 document_id 为空但保留原名；用「name:文档名」作为筛选值，
 // 与「unlinked」（从未关联文档）和数字 document_id 三种取值互不冲突。
-const groupLabel = (item) => item.document_name || (item.document_id === null ? '未关联文档' : '未命名文档')
-const groupValue = (item) => {
-  if (item.document_id !== null && item.document_id !== undefined) return item.document_id
-  return item.document_name ? `name:${item.document_name}` : 'unlinked'
-}
+const groupLabel = noteGroupLabel
+const groupValue = noteGroupValue
 const apiDocumentId = computed(() => (typeof documentId.value === 'number' ? documentId.value : undefined))
 const filterUnlinked = computed(() => documentId.value === 'unlinked')
-const filterDocumentName = computed(() =>
-    typeof documentId.value === 'string' && documentId.value.startsWith('name:') ? documentId.value.slice(5) : undefined)
+const filterDocumentName = computed(() => noteDocumentNameFilter(documentId.value))
 const currentSort = computed(() => viewMode.value === 'document' ? 'document' : timeSort.value)
-const selectedCount = computed(() => selectedNoteIds.value.size)
-const currentPageAllSelected = computed(() =>
-    notes.value.length > 0 && notes.value.every(note => selectedNoteIds.value.has(note.id)))
-const displayGroups = computed(() => {
-  if (viewMode.value !== 'document') return [{ key: 'timeline', name: '', items: notes.value }]
-  const groups = new Map()
-  for (const note of notes.value) {
-    const key = `${note.document_id ?? 'none'}:${note.document_name || '未关联文档'}`
-    if (!groups.has(key)) groups.set(key, { key, name: note.document_name || '未关联文档', items: [] })
-    groups.get(key).items.push(note)
-  }
-  return [...groups.values()]
-})
+const displayGroups = computed(() => groupNotes(notes.value, viewMode.value))
+const {
+  selectionMode,
+  selectedNoteIds,
+  selectedCount,
+  currentPageAllSelected,
+  toggleNoteSelection,
+  startBatchSelection,
+  cancelBatchSelection,
+  toggleCurrentPageSelection,
+} = useNoteSelection(notes)
 
 const queryParams = () => ({
   keyword: keyword.value.trim(),
@@ -356,7 +347,7 @@ const queryParams = () => ({
 })
 
 const { loading, load: loadList } = useListLoader(
-  () => listNotes(queryParams()),
+  requestOptions => listNotes(queryParams(), requestOptions),
   { onError: error => notifyRequestError(error, '笔记加载失败，请重试') },
 )
 
@@ -408,31 +399,6 @@ function openPreview(note) {
 function handleCardClick(note) {
   if (selectionMode.value) toggleNoteSelection(note.id)
   else openPreview(note)
-}
-
-function toggleNoteSelection(id, checked = !selectedNoteIds.value.has(id)) {
-  const next = new Set(selectedNoteIds.value)
-  if (checked) next.add(id)
-  else next.delete(id)
-  selectedNoteIds.value = next
-}
-
-function startBatchSelection() {
-  if (selectionMode.value) return
-  selectionMode.value = true
-  selectedNoteIds.value = new Set()
-}
-
-function cancelBatchSelection() {
-  selectionMode.value = false
-  selectedNoteIds.value = new Set()
-}
-
-function toggleCurrentPageSelection() {
-  const next = new Set(selectedNoteIds.value)
-  if (currentPageAllSelected.value) notes.value.forEach(note => next.delete(note.id))
-  else notes.value.forEach(note => next.add(note.id))
-  selectedNoteIds.value = next
 }
 
 function locateSource(note) {

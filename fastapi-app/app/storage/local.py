@@ -35,8 +35,31 @@ class LocalStorage(StorageBackend):
                 self._remove_empty_parents(destination.parent)
                 raise
 
-        await asyncio.to_thread(copy)
+        copy_task = asyncio.create_task(asyncio.to_thread(copy))
+        try:
+            await asyncio.shield(copy_task)
+        except asyncio.CancelledError as cancellation:
+            async def finish_and_remove() -> None:
+                try:
+                    await copy_task
+                finally:
+                    await asyncio.to_thread(
+                        self._remove_cancelled_save, destination
+                    )
+
+            # Import at call time to avoid the package initialization cycle:
+            # app.storage imports LocalStorage before defining this helper.
+            from app.storage import complete_on_cancellation
+            try:
+                await complete_on_cancellation(finish_and_remove())
+            except asyncio.CancelledError:
+                pass
+            raise cancellation
         return key
+
+    def _remove_cancelled_save(self, destination: Path) -> None:
+        destination.unlink(missing_ok=True)
+        self._remove_empty_parents(destination.parent)
 
     def open(self, key: str) -> BinaryIO:
         path = self._path(key)

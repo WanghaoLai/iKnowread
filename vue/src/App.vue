@@ -1,13 +1,16 @@
 <template>
-  <div class="app-shell">
-    <main class="app-content">
-      <RouterView />
-    </main>
-    <AppFooter />
-  </div>
+  <el-config-provider :locale="zhCn">
+    <div class="app-shell">
+      <main class="app-content">
+        <RouterView />
+      </main>
+      <AppFooter />
+    </div>
+  </el-config-provider>
 </template>
 
 <script setup>
+import zhCn from 'element-plus/es/locale/lang/zh-cn'
 import AppFooter from '@/components/AppFooter.vue'
 </script>
 

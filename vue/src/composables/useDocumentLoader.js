@@ -1,10 +1,6 @@
 import { nextTick } from 'vue'
-import * as pdfjsLib from 'pdfjs-dist'
-import PdfjsWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?worker'
-import { renderAsync } from 'docx-preview'
 import { fetchBytes, fetchText } from '@/utils/preview'
-
-pdfjsLib.GlobalWorkerOptions.workerPort ||= new PdfjsWorker()
+import { loadDocxRenderer, loadPdfEngine } from '../utils/documentEngines.js'
 
 const hardenDocxDom = container => {
   if (!container) return
@@ -73,6 +69,8 @@ export const useDocumentLoader = ({
         if (model.engine === 'docx') {
           const buffer = await fetchBytes(getActiveUrl(), { signal })
           if (version !== loadVersion) return
+          const renderAsync = await loadDocxRenderer()
+          if (version !== loadVersion) return
           await renderAsync(buffer, staging, null, {
             inWrapper: true,
             renderAltChunks: false,
@@ -97,6 +95,8 @@ export const useDocumentLoader = ({
         if (version !== loadVersion) return
         await restoreSourcePosition(restoration)
       } else {
+        const pdfjsLib = await loadPdfEngine()
+        if (version !== loadVersion) return
         const task = pdfjsLib.getDocument({ url: getActiveUrl(), withCredentials: true })
         setPdfLoadingTask(task)
         const documentProxy = await task.promise

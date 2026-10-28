@@ -13,9 +13,16 @@ ACTIVE_STATUSES = ("pending", "processing")
 
 
 async def summary(current: CurrentAccount | int) -> dict:
-    account_id = current if isinstance(current, int) else current.id
-    is_experience = not isinstance(current, int) and current.is_experience
-    if is_experience:
+    shared_ids: list[int] = []
+    if isinstance(current, int):
+        account_id = current
+        is_experience = False
+        policy = None
+    else:
+        account_id = current.id
+        is_experience = current.is_experience
+        policy = None
+    if not isinstance(current, int) and current.is_experience:
         from app.services import experience_service
         policy = await experience_service.require_enabled(current)
         shared_ids = list(await ExperienceDocumentShare.filter(
@@ -25,7 +32,6 @@ async def summary(current: CurrentAccount | int) -> dict:
         ).values_list("document_id", flat=True))
         document_filter = {"id__in": shared_ids, "deleted_at__isnull": True}
     else:
-        policy = None
         document_filter = {"account_id": account_id, "deleted_at__isnull": True}
     active_documents = await Document.filter(
         **document_filter,

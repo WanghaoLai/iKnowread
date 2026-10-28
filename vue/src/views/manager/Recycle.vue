@@ -86,11 +86,11 @@ const data = reactive({
 })
 
 const { loading, load: loadList, invalidate } = useListLoader(
-  signal => listRecycledDocuments({
+  requestOptions => listRecycledDocuments({
       pageNum: data.pageNum,
       pageSize: data.pageSize,
       name: data.name,
-    }, { signal }),
+    }, requestOptions),
   {
     cancellable: true,
     onError: error => notifyRequestError(error, '回收站加载失败，请重试'),

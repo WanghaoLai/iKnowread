@@ -123,12 +123,12 @@ const data = reactive({
 
 // 分页查询
 const { loading, load: loadList } = useListLoader(
-  () => listAccounts({
+  requestOptions => listAccounts({
       role: props.role,
       pageNum: data.pageNum,
       pageSize: data.pageSize,
       name: data.name,
-    }, { skipErrorToast: true }),
+    }, requestOptions),
   { onError: error => notifyRequestError(error, '账号列表加载失败，请重试') },
 )
 

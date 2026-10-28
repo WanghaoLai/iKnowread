@@ -146,3 +146,38 @@ class AnnouncementTests(unittest.IsolatedAsyncioTestCase):
         self.as_account(self.user)
         response = await self.client.put(f"/announcements/{offline['id']}/read")
         self.assertEqual(response.status_code, 404, response.text)
+
+    async def test_user_pagination_and_unread_statistics_stay_global(self):
+        published = [
+            await self.create(f"分页公告 {number}", "published")
+            for number in range(6)
+        ]
+        await self.create("不可见草稿", "draft")
+        self.as_account(self.user)
+        for item in published[:2]:
+            response = await self.client.put(f"/announcements/{item['id']}/read")
+            self.assertEqual(response.status_code, 200, response.text)
+
+        response = await self.client.get(
+            "/announcements", params={"pageNum": 2, "pageSize": 2}
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        data = response.json()["data"]
+        self.assertEqual(data["total"], 6)
+        self.assertEqual(data["unread_count"], 4)
+        self.assertEqual(len(data["list"]), 2)
+
+        republished = published[0]
+        self.as_account(self.admin)
+        await self.client.patch(
+            f"/admin/announcements/{republished['id']}/status",
+            json={"status": "offline"},
+        )
+        await self.client.patch(
+            f"/admin/announcements/{republished['id']}/status",
+            json={"status": "published"},
+        )
+        self.as_account(self.user)
+        refreshed = (await self.client.get("/announcements")).json()["data"]
+        self.assertEqual(refreshed["total"], 6)
+        self.assertEqual(refreshed["unread_count"], 5)

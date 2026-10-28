@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 from pydantic import Field, field_validator
@@ -137,4 +138,16 @@ class Settings(BaseSettings):
         return origins
 
 
-settings = Settings()
+def settings_env_file() -> str | None:
+    """Return the explicit settings file, or the local-development default.
+
+    Release and test runners set ``IKNOWREAD_ENV_FILE=/dev/null`` so an
+    untracked developer file can never change their result.
+    """
+    configured = os.environ.get("IKNOWREAD_ENV_FILE")
+    if configured == "":
+        return None
+    return configured if configured is not None else str(BASE_DIR / ".env")
+
+
+settings = Settings(_env_file=settings_env_file())

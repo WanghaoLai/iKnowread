@@ -4,7 +4,9 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
-SOURCE_ANCHOR_PROTOCOL = "iknowread.source-anchor/v1"
+SOURCE_ANCHOR_PROTOCOL: Literal["iknowread.source-anchor/v1"] = (
+    "iknowread.source-anchor/v1"
+)
 
 
 def normalize_selected_text(value: str) -> str:

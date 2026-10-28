@@ -3,28 +3,60 @@ ENV GOPROXY=https://mirrors.tencent.com/go|https://proxy.golang.org|direct
 # 1. 安装 Git
 RUN apk add --no-cache git
 
-# 2. 获取固定版本的 gosu 源码
-RUN git clone https://github.com/tianon/gosu.git /src/gosu \
-    && cd /src/gosu \
-    && git checkout --detach 6456aaa0f3c854d199d0f037f068eb97515b7513
+# 2. 获取固定版本的 gosu 源码；瞬时网络错误只做有界重试。
+RUN set -eu; \
+    for attempt in 1 2 3 4 5; do \
+        rm -rf /src/gosu; \
+        if git clone https://github.com/tianon/gosu.git /src/gosu \
+            && cd /src/gosu \
+            && git checkout --detach 6456aaa0f3c854d199d0f037f068eb97515b7513; then \
+            exit 0; \
+        fi; \
+        if [ "$attempt" = 5 ]; then exit 1; fi; \
+        sleep "$((attempt * 2))"; \
+    done
 
 # 3. 编译 gosu
 RUN --mount=type=cache,target=/go/pkg/mod,sharing=locked \
     --mount=type=cache,target=/root/.cache/go-build,sharing=locked \
-    cd /src/gosu \
-    && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /go/bin/gosu .
+    set -eu; \
+    cd /src/gosu; \
+    for attempt in 1 2 3 4 5; do \
+        if CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /go/bin/gosu .; then \
+            exit 0; \
+        fi; \
+        if [ "$attempt" = 5 ]; then exit 1; fi; \
+        sleep "$((attempt * 2))"; \
+    done
 
-FROM mysql:8.4@sha256:24989179f58856db763f418010c1169fecc944e3ec1ea7e921572d83eb070f70 AS mysql-runtime
+FROM mysql:8.4@sha256:76f0358884cb92d9a086d24e5671c38048d3fef40f2588703d73eb55392d6b69 AS mysql-runtime
+
+ARG CA_CERTIFICATES_VERSION=2026.2.92_v9.0.319-90.3.el9_8
+ARG LIBBROTLI_VERSION=1.0.9-10.0.1.el9_8
 
 # Apply fixed runtime libraries without floating the MySQL major/minor image.
 # mysql-shell is an administration client, not part of the mysqld runtime or
 # the mysql/mysqldump clients used by health checks and backups. Removing it
 # also removes its bundled Python and Go dependency trees from production.
-RUN microdnf --disablerepo=mysql8.4-server-minimal upgrade -y \
-        pcre2 pcre2-syntax ca-certificates \
-    && microdnf --disablerepo=mysql8.4-server-minimal remove -y mysql-shell \
-    && microdnf clean all \
-    && rm -rf /var/cache/dnf
+RUN set -eu; \
+    microdnf clean all; \
+    for attempt in 1 2 3 4 5; do \
+        if microdnf --disablerepo=mysql8.4-server-minimal upgrade -y \
+            pcre2 pcre2-syntax \
+            "ca-certificates-${CA_CERTIFICATES_VERSION}" \
+            "libbrotli-${LIBBROTLI_VERSION}"; then \
+            break; \
+        fi; \
+        if [ "$attempt" = 5 ]; then exit 1; fi; \
+        microdnf clean all; \
+        sleep "$((attempt * 2))"; \
+    done; \
+    microdnf --disablerepo=mysql8.4-server-minimal remove -y mysql-shell; \
+    rpm -q \
+        "ca-certificates-${CA_CERTIFICATES_VERSION}" \
+        "libbrotli-${LIBBROTLI_VERSION}"; \
+    microdnf clean all; \
+    rm -rf /var/cache/dnf
 
 # The upstream entrypoint needs gosu to drop from root to the mysql user. Keep
 # that behavior while replacing the old Go runtime embedded in the binary.
@@ -39,7 +71,7 @@ COPY --from=mysql-runtime / /
 ENV PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
     GOSU_VERSION=1.19 \
     MYSQL_MAJOR=8.4 \
-    MYSQL_VERSION=8.4.11-1.el9
+    MYSQL_VERSION=8.4.13-1.el9
 WORKDIR /
 VOLUME ["/var/lib/mysql"]
 EXPOSE 3306 33060

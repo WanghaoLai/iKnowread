@@ -121,17 +121,15 @@ const changingId = ref(null)
 const deletingId = ref(null)
 
 const { loading, load: loadList, invalidate } = useListLoader(
-  signal => listAdminAnnouncements({
+  requestOptions => listAdminAnnouncements({
     keyword: filters.keyword.trim(),
     status: filters.status || undefined,
     pageNum: pagination.pageNum,
     pageSize: pagination.pageSize,
-  }, { signal, skipErrorToast: true }),
+  }, requestOptions),
   {
     cancellable: true,
-    onError: error => {
-      if (error?.code !== 'ERR_CANCELED') notifyRequestError(error, '公告列表加载失败，请重试')
-    },
+    onError: error => notifyRequestError(error, '公告列表加载失败，请重试'),
   },
 )
 

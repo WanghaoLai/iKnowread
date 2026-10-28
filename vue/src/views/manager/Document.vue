@@ -158,7 +158,7 @@
 </template>
 
 <script setup>
-import { nextTick, onBeforeUnmount, onMounted, reactive, ref } from "vue";
+import { nextTick, onBeforeUnmount, onMounted, reactive } from "vue";
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from "element-plus";
 import { Search, Refresh, Delete, Document, UploadFilled, View } from "@element-plus/icons-vue";
@@ -169,14 +169,7 @@ import { formatSize, formatTime, documentTagType as tagType } from '@/utils/form
 import { notifyRequestError } from '@/utils/request'
 import { useListLoader } from '@/composables/useListLoader'
 import { useBusyRefresh } from '@/composables/useBusyRefresh'
-import {
-  cancelWebImport,
-  createWebImport,
-  deleteWebImport,
-  listWebImports,
-  retryWebImport,
-} from '@/api/webImports'
-import { getCapabilities } from '@/api/auth'
+import { useWebImportJobs, webJobLabel, webJobType } from '@/composables/useWebImportJobs'
 import { getSession } from '@/utils/session'
 
 const ALLOWED_EXTS = ['pdf', 'docx', 'md']
@@ -200,159 +193,13 @@ const data = reactive({
 
 const retryingOcrIds = reactive(new Set())
 const deletingDocumentIds = reactive(new Set())
-const webImportSubmitting = ref(false)
-const webImportEnabled = ref(false)
-const webImportError = ref('正在检查网页收藏服务…')
-const webJobsLoading = ref(false)
-const webJobsError = ref('')
-const busyWebJobIds = reactive(new Set())
-let webImportTimer = null
-let webImportStopped = false
-let webImportLoadVersion = 0
-let webImportController = null
-const completedWebJobs = new Set()
-
-const webJobLabel = status => ({
-  pending: '排队中', processing: '抓取中', success: '成功', failed: '失败', canceled: '已取消',
-})[status] || '未知'
-const webJobType = status => ({
-  pending: 'warning', processing: 'primary', success: 'success', failed: 'danger', canceled: 'info',
-})[status] || 'info'
-
-const scheduleWebImportRefresh = () => {
-  clearTimeout(webImportTimer)
-  if (!webImportStopped && data.webJobs.some(job => ['pending', 'processing'].includes(job.status))) {
-    webImportTimer = setTimeout(loadWebImports, 2000)
-  }
-}
-
-const loadWebImportCapability = async () => {
-  try {
-    const res = await getCapabilities({ skipErrorToast: true })
-    webImportEnabled.value = Boolean(res.data?.web_import_enabled)
-    webImportError.value = res.data?.web_import_error || '网页收藏服务暂不可用'
-  } catch {
-    webImportEnabled.value = false
-    webImportError.value = '无法读取网页收藏服务状态'
-  }
-}
-
-const loadWebImports = async ({ notify = false } = {}) => {
-  const version = ++webImportLoadVersion
-  webImportController?.abort()
-  const controller = new AbortController()
-  webImportController = controller
-  webJobsLoading.value = true
-  try {
-    const res = await listWebImports({ skipErrorToast: true, signal: controller.signal })
-    if (version !== webImportLoadVersion || webImportStopped) return
-    data.webJobs = res.data || []
-    webJobsError.value = ''
-    let hasNewSuccess = false
-    for (const job of data.webJobs) {
-      if (job.status === 'success' && !completedWebJobs.has(job.id)) {
-        completedWebJobs.add(job.id)
-        hasNewSuccess = true
-      }
-    }
-    if (hasNewSuccess) {
-      data.pageNum = 1
-      await load()
-    }
-    scheduleWebImportRefresh()
-  } catch {
-    if (version !== webImportLoadVersion || controller.signal.aborted || webImportStopped) return
-    webJobsError.value = '网页收藏任务加载失败，系统将自动重试'
-    if (notify) ElMessage.error(webJobsError.value)
-    if (!webImportStopped) {
-      webImportTimer = setTimeout(loadWebImports, 5000)
-    }
-  } finally {
-    if (version === webImportLoadVersion) {
-      webJobsLoading.value = false
-      if (webImportController === controller) webImportController = null
-    }
-  }
-}
-
-const initializeWebImports = async () => {
-  await loadWebImportCapability()
-  await loadWebImports()
-}
-
-const submitWebImport = async () => {
-  if (!webImportEnabled.value || !data.webUrl || webImportSubmitting.value) return
-  webImportSubmitting.value = true
-  try {
-    await createWebImport(data.webUrl, { skipErrorToast: true })
-    data.webUrl = ''
-    ElMessage.success('已加入网页抓取队列')
-    await loadWebImports()
-  } catch (error) {
-    notifyRequestError(error, '网页导入失败，请检查 URL 后重试')
-  } finally {
-    webImportSubmitting.value = false
-  }
-}
-
-const retryWebJob = async job => {
-  if (busyWebJobIds.has(job.id)) return
-  busyWebJobIds.add(job.id)
-  try {
-    await retryWebImport(job.id, { skipErrorToast: true })
-    ElMessage.success('已重新加入抓取队列')
-    await loadWebImports()
-  } catch (error) {
-    notifyRequestError(error, '重新提交抓取任务失败')
-  } finally {
-    busyWebJobIds.delete(job.id)
-  }
-}
-
-const cancelWebJob = async job => {
-  if (busyWebJobIds.has(job.id)) return
-  busyWebJobIds.add(job.id)
-  try {
-    await cancelWebImport(job.id, { skipErrorToast: true })
-    ElMessage.success('抓取任务已取消')
-    await loadWebImports()
-  } catch (error) {
-    notifyRequestError(error, '取消抓取任务失败')
-  } finally {
-    busyWebJobIds.delete(job.id)
-  }
-}
-
-const removeWebJob = async job => {
-  if (busyWebJobIds.has(job.id)) return
-  try {
-    await ElMessageBox.confirm('仅删除该抓取记录，已生成的文档会保留。', '删除抓取记录', {
-      type: 'warning',
-      confirmButtonText: '删除',
-      cancelButtonText: '取消',
-    })
-  } catch {
-    return
-  }
-  busyWebJobIds.add(job.id)
-  try {
-    await deleteWebImport(job.id, { skipErrorToast: true })
-    completedWebJobs.delete(job.id)
-    ElMessage.success('抓取记录已删除')
-    await loadWebImports()
-  } catch (error) {
-    notifyRequestError(error, '删除抓取记录失败')
-  } finally {
-    busyWebJobIds.delete(job.id)
-  }
-}
 
 const { loading, load: loadList, invalidate } = useListLoader(
-  signal => listDocuments({
+  requestOptions => listDocuments({
     pageNum: data.pageNum,
     pageSize: data.pageSize,
     name: data.name,
-  }, { signal }),
+  }, requestOptions),
   {
     cancellable: true,
     onError: error => notifyRequestError(error, '文档列表加载失败，请重试'),
@@ -372,6 +219,27 @@ async function load() {
   data.total = res.data?.total || 0
   scheduleOcrRefresh()
 }
+
+const {
+  webImportSubmitting,
+  webImportEnabled,
+  webImportError,
+  webJobsLoading,
+  webJobsError,
+  busyWebJobIds,
+  initialize: initializeWebImports,
+  submitWebImport,
+  retryWebJob,
+  cancelWebJob,
+  removeWebJob,
+  stop: stopWebImports,
+} = useWebImportJobs({
+  data,
+  onDocumentCreated: async () => {
+    data.pageNum = 1
+    await load()
+  },
+})
 
 // 上传前校验格式与大小
 const beforeUpload = (file) => {
@@ -500,10 +368,7 @@ onMounted(async () => {
   document.getElementById(target)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
 })
 onBeforeUnmount(() => {
-  webImportStopped = true
-  webImportLoadVersion += 1
-  webImportController?.abort()
-  clearTimeout(webImportTimer)
+  stopWebImports()
   stopOcrRefresh()
   invalidate()
 })

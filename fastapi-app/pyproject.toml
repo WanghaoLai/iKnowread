@@ -18,20 +18,7 @@ ignore = [
 
 [tool.mypy]
 python_version = "3.12"
-files = [
-    "app/api_paths.py",
-    "app/common/exception_handler.py",
-    "app/config.py",
-    "app/security.py",
-    "app/services/crawler_client.py",
-    "app/services/auth_guard.py",
-    "app/services/file_validation.py",
-    "app/services/url_safety.py",
-    "app/services/web_import_service.py",
-    "app/storage/base.py",
-    "app/storage/local.py",
-    "app/upload_guard.py",
-]
+files = ["app"]
 ignore_missing_imports = true
 follow_imports = "skip"
 check_untyped_defs = true

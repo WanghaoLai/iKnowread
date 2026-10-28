@@ -81,6 +81,7 @@ import { consumeSourceNavigation } from '@/utils/sourceAnchor'
 import { getDocumentOcrStatus, listDocuments } from '@/api/documents'
 import { useListLoader } from '@/composables/useListLoader'
 import { useBusyRefresh } from '@/composables/useBusyRefresh'
+import { notifyRequestError } from '@/utils/request'
 
 const route = useRoute()
 const router = useRouter()
@@ -104,13 +105,15 @@ let searchTimer = null
 const PAGE_SCROLL_LOCK_CLASS = 'iknowread-reader-open'
 
 const { loading, load: loadList, invalidate } = useListLoader(
-  signal => listDocuments({
+  requestOptions => listDocuments({
     pageNum: data.pageNum,
     pageSize: data.pageSize,
     name: data.name,
-  }, { signal }),
-  // 请求拦截器已统一提示失败，这里保持静默
-  { cancellable: true },
+  }, requestOptions),
+  {
+    cancellable: true,
+    onError: error => notifyRequestError(error, '文档列表加载失败，请重试'),
+  },
 )
 
 const { schedule: scheduleOcrRefresh, stop: stopOcrRefresh } = useBusyRefresh(load, () =>

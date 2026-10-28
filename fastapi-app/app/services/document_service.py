@@ -10,7 +10,12 @@ from app.services.account_service import RELATIVE_PREFIX, normalize_role
 from app.services.file_validation import validate_document
 from app.services.resource_limits import account_lock, ensure_additional_storage, ensure_document_capacity
 from app.services import processing_task_service
-from app.storage import complete_on_cancellation, get_storage, run_storage_io
+from app.storage import (
+    complete_on_cancellation,
+    get_storage,
+    rollback_on_cancellation,
+    run_storage_io,
+)
 from tortoise.transactions import in_transaction
 
 ALLOWED_EXTS = {"pdf", "docx", "md"}
@@ -77,6 +82,67 @@ def ocr_storage_key(doc: Document) -> str | None:
     return None
 
 
+async def _discard_new_upload(storage, key: str, document_id: int | None) -> None:
+    """Remove a new upload without exposing a file/row split-brain state."""
+    staged_key = await run_storage_io(storage.stage, key)
+    try:
+        if document_id is not None:
+            await Document.filter(id=document_id).delete()
+    except BaseException:
+        if staged_key:
+            await run_storage_io(storage.restore, staged_key, key)
+        raise
+    if staged_key:
+        try:
+            await run_storage_io(storage.delete, staged_key)
+        except Exception:
+            # The file is outside account quota and will be purged by trash
+            # reconciliation.  The user-visible publication is already gone.
+            logger.exception("Failed to purge cancelled upload from trash")
+
+
+async def _publish_upload(
+    account_id: int, normalized: str, name: str, ext: str, file: UploadFile
+) -> tuple[Document, str]:
+    storage = get_storage()
+    key: str | None = None
+    doc: Document | None = None
+    try:
+        key = await storage.save(
+            name, file.file, subdir=f"{normalized}/{account_id}/documents"
+        )
+        size = await run_storage_io(storage.size, key)
+        if size > MAX_SIZE:
+            raise CustomException("文件大小不能超过 50MB", status_code=413)
+        # The saved file is now part of on-disk usage; re-check with zero
+        # additional bytes to handle clients that omitted Content-Length.
+        await ensure_additional_storage(account_id, 0)
+        ocr_status = "not_applicable"
+        ocr_error = None
+        if ext == "pdf":
+            # A PDF may only enter the polling state when a live queue can
+            # actually accept it. Configuration alone is insufficient: an
+            # unavailable OCR executable would otherwise leave it pending forever.
+            from app.services import ocr_service
+            ocr_error = ocr_service.availability_error()
+            ocr_status = "failed" if ocr_error else "pending"
+        created = await Document.create(
+            name=name[:255], ext=ext, size=size,
+            path=f"{RELATIVE_PREFIX}{key}", account_id=account_id,
+            ocr_status=ocr_status,
+            ocr_error=ocr_error,
+        )
+        doc = created
+        await processing_task_service.initialize_document(created)
+        return created, key
+    except BaseException:
+        if key is not None:
+            await complete_on_cancellation(
+                _discard_new_upload(storage, key, doc.id if doc else None)
+            )
+        raise
+
+
 async def upload(account_id: int, role: str, file: UploadFile) -> dict:
     normalized = normalize_role(role)
     if not normalized or not await Account.filter(id=account_id, role=normalized).exists():
@@ -91,41 +157,14 @@ async def upload(account_id: int, role: str, file: UploadFile) -> dict:
     storage = get_storage()
     async with account_lock(account_id):
         await ensure_document_capacity(account_id, int(file.size or 0))
-        key = await storage.save(name, file.file, subdir=f"{normalized}/{account_id}/documents")
-        size = await run_storage_io(storage.size, key)
-        if size > MAX_SIZE:
-            await run_storage_io(storage.delete, key)
-            raise CustomException("文件大小不能超过 50MB", status_code=413)
-        try:
-            # The saved file is now part of on-disk usage; re-check with zero
-            # additional bytes to handle clients that omitted Content-Length.
-            await ensure_additional_storage(account_id, 0)
-            ocr_status = "not_applicable"
-            ocr_error = None
-            if ext == "pdf":
-                # A PDF may only enter the polling state when a live queue can
-                # actually accept it. Configuration alone is insufficient: an
-                # unavailable OCR executable would otherwise leave it pending forever.
-                from app.services import ocr_service
-                ocr_error = ocr_service.availability_error()
-                ocr_status = "failed" if ocr_error else "pending"
-            doc = await Document.create(
-                name=name[:255], ext=ext, size=size,
-                path=f"{RELATIVE_PREFIX}{key}", account_id=account_id,
-                ocr_status=ocr_status,
-                ocr_error=ocr_error,
-            )
-            try:
-                await processing_task_service.initialize_document(doc)
-            except Exception:
-                # A new upload has no dependent user data yet. Remove the new
-                # row so task initialization and file publication are atomic to
-                # the caller; cascading cleanup removes any partial stage rows.
-                await doc.delete()
-                raise
-        except Exception:
-            await run_storage_io(storage.delete, key)
-            raise
+
+        async def rollback(publication: tuple[Document, str]) -> None:
+            doc, key = publication
+            await _discard_new_upload(storage, key, doc.id)
+
+        doc, _ = await rollback_on_cancellation(
+            _publish_upload(account_id, normalized, name, ext, file), rollback
+        )
     return serialize(doc)
 
 

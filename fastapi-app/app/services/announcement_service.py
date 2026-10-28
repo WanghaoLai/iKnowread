@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 
 from tortoise.exceptions import IntegrityError
+from tortoise.expressions import F
 from tortoise.transactions import in_transaction
 
 from app.common.exception_handler import CustomException
@@ -133,32 +134,34 @@ async def delete(announcement_id: int) -> None:
         raise CustomException("公告不存在", status_code=404)
 
 
-async def _published_with_reads(account_id: int) -> tuple[list[Announcement], dict[int, int]]:
-    announcements = await Announcement.filter(status="published").order_by(
-        "-published_at", "-id"
-    )
+async def _page_reads(account_id: int, announcements: list[Announcement]) -> dict[int, int]:
     if not announcements:
-        return [], {}
+        return {}
     reads = await AnnouncementRead.filter(
         account_id=account_id,
         announcement_id__in=[item.id for item in announcements],
     ).values("announcement_id", "read_revision")
-    return announcements, {
+    return {
         int(item["announcement_id"]): int(item["read_revision"])
         for item in reads
     }
 
 
 async def user_list(account_id: int, page_num: int, page_size: int) -> dict:
-    announcements, reads = await _published_with_reads(account_id)
-    start = (page_num - 1) * page_size
-    page = announcements[start:start + page_size]
+    published = Announcement.filter(status="published")
+    total = await published.count()
+    read_count = await AnnouncementRead.filter(
+        account_id=account_id,
+        announcement__status="published",
+        read_revision__gte=F("announcement__published_revision"),
+    ).count()
+    page = await published.order_by("-published_at", "-id").offset(
+        (page_num - 1) * page_size
+    ).limit(page_size)
+    reads = await _page_reads(account_id, page)
     return {
-        "total": len(announcements),
-        "unread_count": sum(
-            reads.get(item.id, 0) < item.published_revision
-            for item in announcements
-        ),
+        "total": total,
+        "unread_count": total - read_count,
         "list": [_user_public(item, reads.get(item.id)) for item in page],
     }
 

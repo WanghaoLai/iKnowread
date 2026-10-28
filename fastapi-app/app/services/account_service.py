@@ -96,6 +96,8 @@ async def _create_with_avatar(values: dict, uploaded_avatar: str | None, role: s
             account = await Account.create(**values, avatar=None, using_db=connection)
             if uploaded_avatar:
                 avatar = await claim_temp(uploaded_avatar, role, account.id)
+                if avatar is None:
+                    raise CustomException("头像文件不存在", status_code=400)
                 if avatar != uploaded_avatar:
                     moved = (avatar[len(RELATIVE_PREFIX):], uploaded_avatar[len(RELATIVE_PREFIX):])
                 account.avatar = avatar
@@ -117,7 +119,10 @@ async def create(data: dict) -> Account:
     role = normalize_role(data.get("role"))
     if not role:
         raise CustomException("账号角色无效")
-    username = normalize_username(data.get("username"))
+    raw_username = data.get("username")
+    if not isinstance(raw_username, str):
+        raise CustomException("账号不能为空")
+    username = normalize_username(raw_username)
     if not username:
         raise CustomException("账号不能为空")
     validate_new_avatar(data.get("avatar"))

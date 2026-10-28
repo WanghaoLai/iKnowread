@@ -13,7 +13,12 @@ from app.models import Account, Document
 from app.services import account_service
 from app.services import experience_service
 from app.services.account_service import RELATIVE_PREFIX
-from app.storage import get_storage, run_storage_io
+from app.storage import (
+    complete_on_cancellation,
+    get_storage,
+    rollback_on_cancellation,
+    run_storage_io,
+)
 from app.services.resource_limits import (
     account_lock,
     ensure_additional_storage,
@@ -85,39 +90,51 @@ async def upload_file(
         target_account_id = current.id
 
     async def save_avatar() -> str:
+        key: str | None = None
         if target_account_id is not None:
             await ensure_additional_storage(target_account_id, int(file.size or 0))
-        key = await storage.save(file.filename, file.file, subdir=subdir)
-        if await run_storage_io(storage.size, key) > MAX_AVATAR_SIZE:
-            await run_storage_io(storage.delete, key)
-            raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="头像不能超过 5MB")
-        if target_account_id is not None:
-            try:
+        try:
+            key = await storage.save(file.filename, file.file, subdir=subdir)
+            if await run_storage_io(storage.size, key) > MAX_AVATAR_SIZE:
+                raise HTTPException(
+                    status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                    detail="头像不能超过 5MB",
+                )
+            if target_account_id is not None:
                 await ensure_additional_storage(target_account_id, 0)
-            except Exception:
-                await run_storage_io(storage.delete, key)
-                raise
-        if target_account_id is not None:
-            referenced = set(
-                await Account.exclude(avatar=None).filter(id=target_account_id).values_list("avatar", flat=True)
-            )
-            referenced_keys = {
-                value[len(RELATIVE_PREFIX):] for value in referenced
-                if value and value.startswith(RELATIVE_PREFIX)
-            }
-            def remove_unreferenced_avatars() -> None:
-                for existing in storage.iter_keys(subdir):
-                    if existing != key and existing not in referenced_keys:
-                        storage.delete(existing)
+                referenced = set(
+                    await Account.exclude(avatar=None).filter(
+                        id=target_account_id
+                    ).values_list("avatar", flat=True)
+                )
+                referenced_keys = {
+                    value[len(RELATIVE_PREFIX):] for value in referenced
+                    if value and value.startswith(RELATIVE_PREFIX)
+                }
 
-            await run_storage_io(remove_unreferenced_avatars)
-        return key
+                def remove_unreferenced_avatars() -> None:
+                    for existing in storage.iter_keys(subdir):
+                        if existing != key and existing not in referenced_keys:
+                            storage.delete(existing)
+
+                await run_storage_io(remove_unreferenced_avatars)
+            return key
+        except BaseException:
+            if key is not None:
+                await complete_on_cancellation(run_storage_io(storage.delete, key))
+            raise
+
+    async def rollback_avatar(key: str) -> None:
+        await run_storage_io(storage.delete, key)
+
+    async def publish_avatar() -> str:
+        return await rollback_on_cancellation(save_avatar(), rollback_avatar)
 
     if target_account_id is not None:
         async with account_lock(target_account_id):
-            key = await save_avatar()
+            key = await publish_avatar()
     else:
-        key = await save_avatar()
+        key = await publish_avatar()
     return Result.success(RELATIVE_PREFIX + key)
 
 

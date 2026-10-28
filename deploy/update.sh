@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # Update an existing Docker deployment with a backup, immutable application
-# image tags, health-gated activation and automatic container rollback.
+# image tags, health-gated activation and schema-aware container rollback.
 set -Eeuo pipefail
 umask 077
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
+source "$ROOT_DIR/deploy/release-safety.sh"
 
 INCLUDE_DB=false
 RELEASE_TAG_ARG=""
@@ -132,6 +133,16 @@ else
     TARGET_MYSQL_TAG="$PREVIOUS_MYSQL_TAG"
 fi
 
+schema_fingerprint() {
+    "${COMPOSE[@]}" exec -T db sh -ec '
+        MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysqldump -uroot \
+            --no-data --skip-comments --compact "$MYSQL_DATABASE"
+        printf "\n-- migration-ledger --\n"
+        MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql -uroot "$MYSQL_DATABASE" -NBe \
+            "SELECT CONCAT_WS(CHAR(58), version, name, COALESCE(checksum, CHAR(45))) FROM schema_migration ORDER BY version"
+    ' | canonical_schema_fingerprint
+}
+
 service_image_name() {
     if [[ "$1" == db ]]; then
         printf 'iknowread-mysql'
@@ -200,21 +211,34 @@ APP_TAG="$RELEASE_TAG" MYSQL_IMAGE_TAG="$TARGET_MYSQL_TAG" \
 echo "[3/5] 创建并验证一致性备份"
 bash deploy/backup.sh
 
+PREVIOUS_SCHEMA_FINGERPRINT="$(schema_fingerprint)"
+if [[ -z "$PREVIOUS_SCHEMA_FINGERPRINT" ]]; then
+    echo "无法取得发布前数据库迁移指纹，拒绝激活新版本。" >&2
+    exit 1
+fi
+
 ENV_UPDATED=false
 rollback() {
     status=$?
     trap - ERR INT TERM
     if [[ "$ENV_UPDATED" == true ]]; then
-        echo "新版未通过健康检查，恢复容器快照 ${ROLLBACK_TAG}。" >&2
-        if [[ "$INCLUDE_DB" == true ]]; then
-            rollback_mysql_tag="$ROLLBACK_TAG"
+        current_schema_fingerprint="$(schema_fingerprint 2>/dev/null || true)"
+        if schema_state_allows_container_rollback \
+            "$PREVIOUS_SCHEMA_FINGERPRINT" "$current_schema_fingerprint"; then
+            echo "新版未通过健康检查且数据库未迁移，恢复容器快照 ${ROLLBACK_TAG}。" >&2
+            if [[ "$INCLUDE_DB" == true ]]; then
+                rollback_mysql_tag="$ROLLBACK_TAG"
+            else
+                rollback_mysql_tag="$PREVIOUS_MYSQL_TAG"
+            fi
+            set_release_tags "$ROLLBACK_TAG" "$rollback_mysql_tag"
+            APP_TAG="$ROLLBACK_TAG" MYSQL_IMAGE_TAG="$rollback_mysql_tag" \
+                "${COMPOSE[@]}" up -d --wait --wait-timeout 300 --remove-orphans || \
+                echo "严重：自动回滚未恢复健康，请立即检查容器并使用最新 COMPLETE 备份。" >&2
         else
-            rollback_mysql_tag="$PREVIOUS_MYSQL_TAG"
+            echo "严重：数据库迁移状态已改变或无法确认，拒绝让旧镜像连接未知结构。" >&2
+            echo "新版本标签和 COMPLETE 备份均已保留；请前向修复，或隔离服务后从本次备份恢复。" >&2
         fi
-        set_release_tags "$ROLLBACK_TAG" "$rollback_mysql_tag"
-        APP_TAG="$ROLLBACK_TAG" MYSQL_IMAGE_TAG="$rollback_mysql_tag" \
-            "${COMPOSE[@]}" up -d --wait --wait-timeout 300 --remove-orphans || \
-            echo "严重：自动回滚未恢复健康，请立即检查容器并使用最新 COMPLETE 备份。" >&2
     fi
     exit "$status"
 }

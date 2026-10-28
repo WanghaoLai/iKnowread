@@ -1,3 +1,5 @@
+# Compile for Python 3.12 with:
+# pip-compile --generate-hashes --strip-extras -o requirements.lock requirements.txt
 fastapi~=0.143.0
 uvicorn~=0.38.0
 tortoise-orm~=0.25.1

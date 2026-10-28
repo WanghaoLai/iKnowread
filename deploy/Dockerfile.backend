@@ -36,7 +36,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     apt-get clean
 COPY fastapi-app/requirements.lock ./requirements.lock
 RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
-    pip install -r requirements.lock
+    pip install --require-hashes -r requirements.lock
 RUN ocrmypdf --version \
     && tesseract --list-langs | grep -Fx eng \
     && tesseract --list-langs | grep -Fx chi_sim

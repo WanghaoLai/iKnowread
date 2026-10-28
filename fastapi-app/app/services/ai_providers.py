@@ -160,7 +160,8 @@ def parse_model_list(provider: str, result: dict) -> list[dict]:
         if model_id in seen:
             continue
         seen.add(model_id)
-        model_info = item.get("model_info") if isinstance(item.get("model_info"), dict) else {}
+        raw_model_info = item.get("model_info")
+        model_info = raw_model_info if isinstance(raw_model_info, dict) else {}
         models.append({
             "id": model_id,
             "name": item.get("name") if isinstance(item.get("name"), str) else "",

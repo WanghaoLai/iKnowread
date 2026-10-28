@@ -4,11 +4,8 @@ set -Eeuo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-SCAN_IMAGES=false
-if [[ $# -eq 1 && "${1:-}" == "--scan" ]]; then
-    SCAN_IMAGES=true
-elif [[ $# -gt 0 ]]; then
-    echo "用法: bash deploy/release-check.sh [--scan]" >&2
+if [[ $# -gt 0 ]]; then
+    echo "用法: bash deploy/release-check.sh" >&2
     exit 64
 fi
 
@@ -18,6 +15,7 @@ command -v docker >/dev/null 2>&1 || {
 }
 docker info >/dev/null
 docker compose version >/dev/null
+docker scout version >/dev/null
 
 TARGET_PLATFORM="${TARGET_PLATFORM:-}"
 if [[ -n "$TARGET_PLATFORM" ]]; then
@@ -47,6 +45,7 @@ export VERIFY_ADMIN_PASSWORD='release-check-admin-password-not-for-production'
 
 echo '[1/7] 校验 Compose 配置'
 python3 fastapi-app/scripts/verify_delivery_manifest.py
+bash deploy/test-release-safety.sh
 docker compose --env-file /dev/null --profile web-import \
     -f compose.yaml -f deploy/compose.verify.yaml config --quiet
 docker compose --env-file /dev/null --profile web-import -f compose.yaml config --format json \
@@ -74,14 +73,23 @@ done
 echo '[3/7] 在生产后端镜像中运行静态检查和回归测试'
 docker run --rm \
     -e "AUTH_SECRET=${AUTH_SECRET}" \
+    -e IKNOWREAD_ENV_FILE=/dev/null \
+    -e DEBUG=false \
+    -e ALLOW_REGISTRATION=false \
+    -e DB_AUTO_CREATE=false \
     -e PIP_DISABLE_PIP_VERSION_CHECK=1 \
     -e PIP_CACHE_DIR=/tmp/pip-cache \
-    --mount "type=bind,src=${ROOT_DIR}/fastapi-app/tests,dst=/app/tests,readonly" \
-    --mount "type=bind,src=${ROOT_DIR}/fastapi-app/scripts,dst=/app/scripts,readonly" \
-    --mount "type=bind,src=${ROOT_DIR}/fastapi-app,dst=/source,readonly" \
+    -e XDG_CACHE_HOME=/tmp/check-cache \
+    --mount "type=bind,src=${ROOT_DIR}/fastapi-app/app,dst=/source/app,readonly" \
+    --mount "type=bind,src=${ROOT_DIR}/fastapi-app/tests,dst=/source/tests,readonly" \
+    --mount "type=bind,src=${ROOT_DIR}/fastapi-app/scripts,dst=/source/scripts,readonly" \
+    --mount "type=bind,src=${ROOT_DIR}/fastapi-app/main.py,dst=/source/main.py,readonly" \
+    --mount "type=bind,src=${ROOT_DIR}/fastapi-app/pyproject.toml,dst=/source/pyproject.toml,readonly" \
+    --mount "type=bind,src=${ROOT_DIR}/fastapi-app/requirements.lock,dst=/source/requirements.lock,readonly" \
+    --mount "type=bind,src=${ROOT_DIR}/fastapi-app/requirements-dev.lock,dst=/source/requirements-dev.lock,readonly" \
     --mount "type=bind,src=${ROOT_DIR}/vue/src/api/apiContract.json,dst=/vue/src/api/apiContract.json,readonly" \
     "iknowread-backend:${APP_TAG}" \
-    sh -eu -c 'python -m pip install --target /tmp/check-tools -r /source/requirements-dev.lock >/dev/null && export PATH="/tmp/check-tools/bin:$PATH" PYTHONPATH="/tmp/check-tools" COVERAGE_FILE="/tmp/iknowread.coverage" && cd /source && python scripts/document_contract.py --check && ruff check --no-cache app tests scripts && mypy && coverage erase && coverage run -m unittest discover -s tests -p "test_*.py" && coverage report'
+    sh -eu -c 'test ! -e /source/.env && install -d /tmp/check-cache && python -m pip install --require-hashes --target /tmp/check-tools -r /source/requirements-dev.lock >/dev/null && export PYTHONPATH="/tmp/check-tools" COVERAGE_FILE="/tmp/iknowread.coverage" && cd /source && python scripts/document_contract.py --check && python -m ruff check --no-cache app tests scripts && python -m mypy --no-incremental && python -m pip_audit --cache-dir /tmp/check-cache/pip-audit --require-hashes --disable-pip -r requirements.lock && python -m coverage erase && python -m coverage run -m unittest discover -s tests -p "test_*.py" && python -m coverage report'
 
 echo '[4/7] 使用锁文件执行前端静态检查、测试、生产依赖审计和构建'
 docker run --rm \
@@ -98,7 +106,7 @@ docker run --rm \
     --mount "type=bind,src=${ROOT_DIR}/vue/src,dst=/workspace/src,readonly" \
     --mount "type=bind,src=${ROOT_DIR}/vue/tests,dst=/workspace/tests,readonly" \
     node:24-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20 \
-    sh -eu -c 'npm ci && npm run check && test -z "$(find dist -type f -name "*.map" -print -quit)" && ! grep -R "sourceMappingURL=" dist && npm audit --omit=dev'
+    sh -eu -c 'npm ci && npm run check && test -z "$(find dist -type f -name "*.map" -print -quit)" && ! grep -R "sourceMappingURL=" dist && npm audit --omit=dev --audit-level=moderate && npm audit --audit-level=high'
 
 echo '[5/7] 校验运行镜像中的关键二进制、真实 OCR 与 Caddy 配置'
 docker run --rm \
@@ -106,7 +114,7 @@ docker run --rm \
     --entrypoint caddy "iknowread-web:${APP_TAG}" \
     validate --config /etc/caddy/Caddyfile --adapter caddyfile
 docker run --rm --entrypoint /bin/sh "iknowread-mysql:${MYSQL_IMAGE_TAG}" \
-    -c 'test ! -e /usr/bin/mysqlsh && mysqld --version && mysql --version && mysqldump --version'
+    -c 'test ! -e /usr/bin/mysqlsh && mysqld --version | grep -F "Ver 8.4.13 " && mysql --version && mysqldump --version'
 docker run --rm --entrypoint /usr/local/bin/gosu "iknowread-mysql:${MYSQL_IMAGE_TAG}" --version
 docker run --rm --entrypoint /bin/sh "iknowread-backend:${APP_TAG}" \
     -ec 'minimum="3.0.22-1~deb12u2"; for package in openssl libssl3; do version="$(dpkg-query -W "$package" | cut -f2)"; echo "$package $version"; dpkg --compare-versions "$version" ge "$minimum"; done'
@@ -160,40 +168,35 @@ cleanup_verify_stack
 trap - EXIT
 
 echo '[7/7] 镜像漏洞检查（全部严重项可见；已有修复版本的严重项阻断发布）'
-if [[ "$SCAN_IMAGES" == true ]]; then
-    docker scout version >/dev/null
-    for image in backend web crawler; do
-        echo "iknowread-${image}:${APP_TAG}：未修复的 Critical/High（报告，不静默忽略）"
-        docker scout cves \
-            --only-severity critical,high \
-            --only-unfixed \
-            --only-vuln-packages \
-            --format only-packages \
-            "local://iknowread-${image}:${APP_TAG}"
-        echo "iknowread-${image}:${APP_TAG}：已有修复版本的 Critical/High（发布门禁）"
-        docker scout cves --exit-code \
-            --only-severity critical,high \
-            --only-fixed \
-            --only-vuln-packages \
-            --format packages \
-            "local://iknowread-${image}:${APP_TAG}"
-    done
-    echo "iknowread-mysql:${MYSQL_IMAGE_TAG}：未修复的 Critical/High（报告，不静默忽略）"
+for image in backend web crawler; do
+    echo "iknowread-${image}:${APP_TAG}：未修复的 Critical/High（报告，不静默忽略）"
     docker scout cves \
         --only-severity critical,high \
         --only-unfixed \
         --only-vuln-packages \
         --format only-packages \
-        "local://iknowread-mysql:${MYSQL_IMAGE_TAG}"
-    echo "iknowread-mysql:${MYSQL_IMAGE_TAG}：已有修复版本的 Critical/High（发布门禁）"
+        "local://iknowread-${image}:${APP_TAG}"
+    echo "iknowread-${image}:${APP_TAG}：已有修复版本的 Critical/High（发布门禁）"
     docker scout cves --exit-code \
         --only-severity critical,high \
         --only-fixed \
         --only-vuln-packages \
         --format packages \
-        "local://iknowread-mysql:${MYSQL_IMAGE_TAG}"
-else
-    echo '已跳过 Docker Scout；正式发布前请使用 --scan 再运行一次。'
-fi
+        "local://iknowread-${image}:${APP_TAG}"
+done
+echo "iknowread-mysql:${MYSQL_IMAGE_TAG}：未修复的 Critical/High（报告，不静默忽略）"
+docker scout cves \
+    --only-severity critical,high \
+    --only-unfixed \
+    --only-vuln-packages \
+    --format only-packages \
+    "local://iknowread-mysql:${MYSQL_IMAGE_TAG}"
+echo "iknowread-mysql:${MYSQL_IMAGE_TAG}：已有修复版本的 Critical/High（发布门禁）"
+docker scout cves --exit-code \
+    --only-severity critical,high \
+    --only-fixed \
+    --only-vuln-packages \
+    --format packages \
+    "local://iknowread-mysql:${MYSQL_IMAGE_TAG}"
 
 echo '发布前检查全部通过。'
